@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+:root{--bg:#e6e6e6;--fr:#f2f2f2;--cd:#fff;--in:#f3f3f3;--tx:#161616;--mu:#8a8a8a;--ac:#f26a2e;--bd:#e9e9e9;--dk:#1c1c1c;--dt:#fff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px)}
+:root[data-theme="dark"]{--bg:#0b0b0c;--fr:#141415;--cd:#1d1d20;--in:#27272b;--tx:#f2f2f2;--mu:#9b9ba1;--bd:#2d2d31;--dk:#f2f2f2;--dt:#111}
+html,body{background:var(--bg);color:var(--tx);margin:0;font-family:'Inter',system-ui,sans-serif;font-size:13px}
+.fr{background:var(--fr);border-radius:28px}.cd{background:var(--cd);border-radius:18px;padding:16px}.in{background:var(--in);border-radius:14px}
+.mu{color:var(--mu)}.pill{border-radius:999px}.dk{background:var(--dk);color:var(--dt)}.ac{background:var(--ac);color:#fff}
+.b{border:0;cursor:pointer;font-weight:600;font-size:13px;border-radius:999px;padding:10px 14px;background:var(--in);color:var(--tx)}
+.b.dk{background:var(--dk);color:var(--dt)}.b.ac{background:var(--ac);color:#fff}
+.ib{width:36px;height:36px;border-radius:999px;background:var(--cd);display:flex;align-items:center;justify-content:center;border:0;cursor:pointer;color:var(--tx)}
+input,select,textarea{background:var(--in);color:var(--tx);border:1px solid var(--bd);border-radius:12px;padding:9px 12px;width:100%;font-size:13px;outline:none}
+.bar{height:7px;border-radius:99px;background:var(--in);overflow:hidden}.bar i{display:block;height:100%;background:var(--ac);border-radius:99px}
+.badge{display:inline-flex;gap:3px;align-items:center;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:600;background:#e4f6ea;color:#1a9a4a}
+.ac .badge{background:rgba(255,255,255,.28);color:#fff}
+.th{background:var(--in);border-radius:10px;color:var(--mu)}
+.row{display:grid;grid-template-columns:28px 1.1fr 1.7fr 1fr 1.2fr 1.6fr 24px;align-items:center;gap:8px;padding:12px 10px;border-bottom:1px solid var(--bd)}
+.cb{appearance:none;width:15px;height:15px;border:1.5px solid var(--mu);border-radius:4px;padding:0;background:transparent}.cb:checked{background:var(--dk);border-color:var(--dk)}
+@media(max-width:767px){.row{grid-template-columns:1.7fr 1fr}.hm{display:none!important}body{padding-bottom:16px}}
+::-webkit-scrollbar{display:none}
