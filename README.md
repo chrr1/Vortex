@@ -1,4 +1,4 @@
-# Dompetku AI – Personal Finance Assistant (Frontend)
+# Vortex – Personal Finance Assistant (Frontend)
 
 Next.js 14 (App Router) · TypeScript · Tailwind CSS · Recharts. Hanya frontend dengan data dummy; belum ada backend/database.
 

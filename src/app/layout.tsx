@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Dompetku AI – Personal Finance Assistant',
+  title: 'Vortex – Personal Finance Assistant',
   description: 'Manage your money naturally, understand your finances intelligently.',
   manifest: '/manifest.webmanifest',
   icons: { icon: '/icon.svg' },
