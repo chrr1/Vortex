@@ -7,8 +7,10 @@ import htm from 'htm';
 import { createClient } from '@/lib/supabase/client';
 import { getSessionUser, signOutUser } from '@/lib/supabase/auth';
 import { fetchUserTransactions, insertTransaction } from '@/lib/supabase/transactions';
-import { fetchUserGoals, insertGoal } from '@/lib/supabase/goals';
+import { fetchUserGoals, insertGoal, updateGoalAmount, deleteGoal } from '@/lib/supabase/goals';
 import { fetchUserWallets } from '@/lib/supabase/wallets';
+import { fetchUserBudgets, upsertBudget } from '@/lib/supabase/budgets';
+import { fetchCategories, insertCategory } from '@/lib/supabase/categories';
 const html = htm.bind(React.createElement);
 const I = (k, s = 18) => html`<svg width=${s} height=${s} aria-hidden="true"><use href=${'#' + k}/></svg>`;
 const fmt = n => 'Rp' + Math.round(n).toLocaleString('id-ID');
@@ -26,7 +28,12 @@ const CatIcon = (cat, s = 14) => I(CAT_ICONS[cat] || 'other', s);
 const WAL = [{ id: 'bca', n: 'BCA', b: 1500000, no: '6782', on: 1 }, { id: 'cash', n: 'Cash', b: 300000, no: '0001', on: 1 }, { id: 'dana', n: 'DANA', b: 250000, no: '4356', on: 1 }, { id: 'gopay', n: 'GoPay', b: 150000, no: '9120', on: 0 }];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu'];
 const TREND = [[2.1, 1.6], [2.8, 1.4], [2.4, 1.2], [2.6, 1.7], [3.1, 1.5], [2.9, 2.1], [2.7, 1.8], [2.5, 1.6]].map((v, i) => ({ m: MON[i], Pengeluaran: v[0], Pemasukan: v[1] }));
-const BUD = [['Makanan', 500000], ['Transportasi', 300000], ['Hiburan', 200000], ['Belanja', 800000]];
+const DEFAULT_BUDGETS = [
+  { category_name: 'Makanan', amount: 500000 },
+  { category_name: 'Transportasi', amount: 300000 },
+  { category_name: 'Hiburan', amount: 200000 },
+  { category_name: 'Belanja', amount: 800000 }
+];
 const MC = { manual: ['#2f80ed', 'Manual'], ai_chat: ['#f26a2e', 'AI Chat'], voice: ['#22a55b', 'Voice'] };
 let uid = 77; const nowS = () => { const d = new Date(); return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/(\w+) (\d{4})/, '$1, $2') + ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) };
 const parseTxDate = (s) => { if (!s) return new Date(); const d = new Date(s.replace(',', '')); return isNaN(d.getTime()) ? new Date() : d };
@@ -52,17 +59,17 @@ function parse(t, m) {
   }).filter(Boolean);
 }
 const Dots = () => html`<span class="mu">${I('dots', 16)}</span>`;
-const Stat = ({ l, v, ic, ac, bd, sub = 'bulan ini' }) => html`<div class=${'rounded-[16px] p-3.5 flex flex-col justify-between min-h-[110px] ' + (ac ? 'ac' : 'in')} style=${ac ? {} : { background: 'var(--in)' }}>
+const Stat = ({ l, v, ic, ac, bd, sub = 'bulan ini', smallVal = false }) => html`<div class=${'rounded-[16px] p-3.5 flex flex-col justify-between min-h-[110px] ' + (ac ? 'ac' : 'in')} style=${ac ? {} : { background: 'var(--in)' }}>
  <div class="flex justify-between items-start"><span class=${'text-[13px] font-medium ' + (ac ? '' : 'mu')}>${l}</span><span class="w-7 h-7 rounded-full flex items-center justify-center" style=${{ background: ac ? 'rgba(255,255,255,.25)' : 'var(--cd)' }}>${I(ic, 14)}</span></div>
- <div class="text-[24px] font-bold tracking-tight mt-2">${v}</div><div class="flex items-center gap-1.5"><span class="badge">${bd}</span><span class=${'text-[10px] ' + (ac ? 'opacity-90' : 'mu')}>${sub}</span></div></div>`;
+ <div class=${(smallVal ? 'text-[18px] md:text-[20px]' : 'text-[22px] md:text-[24px]') + ' font-bold tracking-tight mt-2 truncate'}>${v}</div><div class="flex items-center gap-1.5"><span class="badge">${bd}</span><span class=${'text-[10px] ' + (ac ? 'opacity-90' : 'mu')}>${sub}</span></div></div>`;
 const Hatch = () => html`<defs><pattern id="h" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="7" fill="#fbd9c9"/><rect width="3.5" height="7" fill="#f26a2e"/></pattern></defs>`;
 const Row = ({ t, sel, tg }) => html`<div class="row" style=${{ background: sel ? 'var(--in)' : 'transparent' }}>
  <input type="checkbox" class="cb hm" checked=${!!sel} onChange=${tg}/>
- <span class="hm mu font-normal text-[11px]">TRX_${String(t.id).padStart(6, '0')}</span>
- <span class="flex items-center gap-2 min-w-0"><span class="w-6 h-6 rounded-md in flex items-center justify-center mu shrink-0">${CatIcon(t.category, 14)}</span><span class="truncate"><span class="block truncate font-semibold">${t.description}</span><span class="md:hidden mu text-[11px] font-normal">${t.date}</span></span></span>
- <span class="font-bold text-right md:text-left text-[14px]" style=${{ color: t.type === 'income' ? '#1a9a4a' : 'inherit' }}>${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</span>
- <span class="hm flex items-center gap-1.5 font-normal"><i class="w-1.5 h-1.5 rounded-full" style=${{ background: MC[t.m][0] }}></i>${MC[t.m][1]}</span>
- <span class="hm mu font-normal">${t.date}</span><span class="hm"><${Dots}/></span></div>`;
+ <span class="hm mu font-normal text-[10.5px]">TRX_${String(t.id).padStart(6, '0')}</span>
+ <span class="flex items-center gap-2 min-w-0"><span class="w-5 h-5 rounded-md in flex items-center justify-center mu shrink-0">${CatIcon(t.category, 12)}</span><span class="truncate"><span class="block truncate font-medium text-xs">${t.description}</span><span class="md:hidden mu text-[10px] font-normal">${t.date}</span></span></span>
+ <span class="font-bold text-right md:text-left text-xs md:text-[12.5px]" style=${{ color: t.type === 'income' ? '#1a9a4a' : 'inherit' }}>${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</span>
+ <span class="hm flex items-center gap-1.5 font-normal text-[10.5px]"><i class="w-1.5 h-1.5 rounded-full" style=${{ background: MC[t.m][0] }}></i>${MC[t.m][1]}</span>
+ <span class="hm mu font-normal text-[10.5px] leading-tight">${t.date}</span><span class="hm mu opacity-70 hover:opacity-100 cursor-pointer"><${Dots}/></span></div>`;
 function Table({ txs, limit, full, initialPeriod = 'all', onViewAll }) {
   const [q, setQ] = useState(''), [f, setF] = useState('all'), [sel, setSel] = useState([73]), [period, setPeriod] = useState(initialPeriod);
   React.useEffect(() => { if (initialPeriod) setPeriod(initialPeriod); }, [initialPeriod]);
@@ -79,34 +86,34 @@ function Table({ txs, limit, full, initialPeriod = 'all', onViewAll }) {
   const L = byPeriod.filter(t => (f === 'all' || t.type === f) && (t.description + t.category).toLowerCase().includes(q.toLowerCase())).slice(0, limit || 99);
 
   return html`<div class="cd h-full">
-  <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5">
    <div>
-    <b class="text-[15px] block">${full ? 'Riwayat Transaksi' : 'Aktivitas Terbaru'}</b>
-    <span class="text-[11px] mu">${period === 'today' ? 'Aktivitas hari ini' : period === 'week' ? 'Aktivitas 7 hari terakhir' : period === 'month' ? 'Aktivitas bulan ini' : 'Semua aktivitas tercatat'}</span>
+    <b class="text-sm block">${full ? 'Riwayat Transaksi' : 'Aktivitas Terbaru'}</b>
+    <span class="text-[10.5px] mu">${period === 'today' ? 'Aktivitas hari ini' : period === 'week' ? 'Aktivitas 7 hari terakhir' : period === 'month' ? 'Aktivitas bulan ini' : 'Semua aktivitas tercatat'}</span>
    </div>
-   <div class="flex flex-wrap items-center gap-2">
-    <div class="flex items-center gap-2 px-3 in pill"><span class="mu">${I('search', 15)}</span><input class="!bg-transparent !border-0 !p-0 !w-20 md:!w-32" placeholder="Cari" value=${q} onChange=${e => setQ(e.target.value)}/></div>
-    <button class="b flex items-center gap-1.5" style=${{ border: '1px solid var(--bd)', background: 'var(--cd)' }} onClick=${() => setF(f === 'all' ? 'income' : f === 'income' ? 'expense' : 'all')}>${f === 'all' ? 'Semua' : f === 'income' ? 'Pemasukan' : 'Pengeluaran'} ${I('filt', 14)}</button>
+   <div class="flex flex-wrap items-center gap-1.5">
+    <div class="flex items-center gap-1.5 px-2.5 py-1 in pill text-xs"><span class="mu">${I('search', 13)}</span><input class="!bg-transparent !border-0 !p-0 !w-20 md:!w-28 text-xs" placeholder="Cari" value=${q} onChange=${e => setQ(e.target.value)}/></div>
+    <button class="b !py-1 !px-2.5 !text-xs flex items-center gap-1" style=${{ border: '1px solid var(--bd)', background: 'var(--cd)' }} onClick=${() => setF(f === 'all' ? 'income' : f === 'income' ? 'expense' : 'all')}>${f === 'all' ? 'Semua' : f === 'income' ? 'Pemasukan' : 'Pengeluaran'} ${I('filt', 12)}</button>
    </div>
   </div>
 
-  <div class="flex items-center justify-between gap-2 mb-3 overflow-x-auto pb-1">
-   <div class="flex items-center gap-1 p-1 in pill text-[11px]">
+  <div class="flex items-center justify-between gap-2 mb-2.5 overflow-x-auto pb-0.5">
+   <div class="flex items-center gap-1 p-0.5 in pill text-[10.5px]">
     ${[['all', 'Semua'], ['today', 'Hari Ini'], ['week', 'Minggu Ini'], ['month', 'Bulan Ini']].map(([k, l]) => html`
-     <button key=${k} onClick=${() => setPeriod(k)} class=${'px-3 py-1 pill font-medium transition-colors ' + (period === k ? 'dk' : '')}>${l}</button>
+     <button key=${k} onClick=${() => setPeriod(k)} class=${'px-2.5 py-0.5 pill font-semibold transition-colors ' + (period === k ? 'dk' : 'mu hover:text-[var(--tx)]')}>${l}</button>
     `)}
    </div>
-   ${!full && onViewAll && html`<button class="text-[11px] mu font-semibold hover:underline flex items-center gap-1" onClick=${onViewAll}>Lihat Semua ${I('arrow-right', 12)}</button>`}
+   ${!full && onViewAll && html`<button class="text-[11px] mu font-semibold hover:underline flex items-center gap-1" onClick=${onViewAll}>Lihat Semua ${I('arrow-right', 11)}</button>`}
   </div>
 
   ${(period !== 'all' || full) && html`
-   <div class="in p-2.5 mb-3 rounded-[12px] flex flex-wrap items-center justify-between gap-2 text-[12px]">
-    <div class="flex items-center gap-2">
-     <span class="w-2 h-2 rounded-full inline-block ${period === 'today' ? 'ac' : 'dk'}"></span>
+   <div class="in p-2 mb-2.5 rounded-[12px] flex flex-wrap items-center justify-between gap-2 text-[11px]">
+    <div class="flex items-center gap-1.5">
+     <span class="w-1.5 h-1.5 rounded-full inline-block ${period === 'today' ? 'ac' : 'dk'}"></span>
      <b>${period === 'today' ? 'Rincian Hari Ini' : period === 'week' ? 'Rincian Minggu Ini' : period === 'month' ? 'Rincian Bulan Ini' : 'Ringkasan Filter'}</b>
      <span class="mu">(${byPeriod.length} transaksi)</span>
     </div>
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-2.5 text-[11px]">
      <span class="text-[#1a9a4a] font-semibold">+${fmt(subInc)}</span>
      <span class="text-[#d93025] font-semibold">-${fmt(subExp)}</span>
      <span class="mu font-medium">Net: <b style=${{ color: (subInc - subExp) >= 0 ? '#1a9a4a' : '#d93025' }}>${fmt(subInc - subExp)}</b></span>
@@ -115,58 +122,417 @@ function Table({ txs, limit, full, initialPeriod = 'all', onViewAll }) {
   `}
 
   <div class="rounded-[14px] overflow-hidden" style=${{ border: '1px solid var(--bd)' }}>
-   <div class="row th hm !border-0" style=${{ fontSize: 12 }}><span></span><span>ID Transaksi</span><span>Aktivitas</span><span>Nominal</span><span>Metode</span><span>Tanggal & Jam</span><span></span></div>
+   <div class="row th hm !border-0 !py-1 text-[10.5px] font-semibold" style=${{ color: 'var(--mu)' }}><span></span><span>ID Transaksi</span><span>Aktivitas</span><span>Nominal</span><span>Metode</span><span>Tanggal & Jam</span><span></span></div>
    ${L.map(t => html`<${Row} key=${t.id} t=${t} sel=${sel.includes(t.id)} tg=${() => setSel(sel.includes(t.id) ? sel.filter(x => x !== t.id) : [...sel, t.id])}/>`)}
-   ${!L.length && html`<div class="mu text-center py-8">Tidak ada transaksi untuk filter ini.</div>`}
+   ${!L.length && html`<div class="mu text-center py-6 text-xs">Tidak ada transaksi untuk filter ini.</div>`}
   </div>
  </div>`;
 }
-function Quick({ init, onClose, onSave }) {
+function CustomSelect({ value, options, onChange, iconRenderer, placeholder = 'Pilih' }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    if (open) {
+      document.addEventListener('mousedown', handleClick);
+      document.addEventListener('touchstart', handleClick);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('touchstart', handleClick);
+    };
+  }, [open]);
+
+  const selectedOpt = options.find(o => (typeof o === 'object' ? (o.id || o.value || o.name) === value : o === value));
+  const selectedLabel = selectedOpt 
+    ? (typeof selectedOpt === 'object' ? (selectedOpt.name || selectedOpt.label || selectedOpt.n) : selectedOpt)
+    : placeholder;
+
+  return html`
+    <div class="relative w-full" ref=${ref}>
+      <button
+        type="button"
+        onClick=${() => setOpen(!open)}
+        class="w-full flex items-center justify-between in px-3 py-2.5 rounded-xl border border-[var(--bd)] text-xs font-semibold hover:border-gray-400 transition cursor-pointer select-none"
+      >
+        <span class="flex items-center gap-2 truncate">
+          ${iconRenderer ? iconRenderer(value) : null}
+          <span class="truncate">${selectedLabel}</span>
+        </span>
+        <span class=${`mu transition-transform duration-200 ${open ? 'rotate-180' : ''}`}>
+          ${I('chev', 12)}
+        </span>
+      </button>
+
+      ${open && html`
+        <div class="absolute left-0 right-0 top-full mt-1.5 cd p-1 shadow-2xl rounded-xl border border-[var(--bd)] z-50 max-h-48 overflow-y-auto flex flex-col gap-0.5">
+          ${options.map(opt => {
+            const val = typeof opt === 'object' ? (opt.id || opt.value || opt.name) : opt;
+            const label = typeof opt === 'object' ? (opt.name || opt.label || opt.n) : opt;
+            const isSelected = val === value;
+            return html`
+              <button
+                key=${val}
+                type="button"
+                onClick=${() => { onChange(val); setOpen(false); }}
+                class=${`w-full text-left px-2.5 py-2 rounded-lg text-xs font-medium flex items-center justify-between transition ${
+                  isSelected ? 'bg-[var(--in)] font-bold text-[var(--tx)]' : 'hover:bg-[var(--in)] text-[var(--tx)]'
+                }`}
+              >
+                <span class="flex items-center gap-2 truncate">
+                  ${iconRenderer ? iconRenderer(val) : null}
+                  <span class="truncate">${label}</span>
+                </span>
+                ${isSelected ? html`<span class="text-[#f26a2e] font-bold">✓</span>` : null}
+              </button>
+            `;
+          })}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function Quick({ init, onClose, onSave, wallets = [], categories = [] }) {
   const isDirectType = init === 'income' || init === 'expense';
-  const [tab, setTab] = useState(isDirectType ? 'manual' : init), [txt, setTxt] = useState(''), [res, setRes] = useState([]), [rec, setRec] = useState(false);
+  const availableWallets = wallets && wallets.length > 0 ? wallets : WAL;
+  const defaultWalletId = availableWallets[0]?.id || availableWallets[0]?.name || 'cash';
+  const [tab, setTab] = useState(isDirectType ? 'manual' : init);
+  const [txt, setTxt] = useState('');
+  const [res, setRes] = useState([]);
+  const [rec, setRec] = useState(false);
+
   const [f, setF] = useState({
     type: init === 'income' ? 'income' : 'expense',
     amount: '',
     category: init === 'income' ? 'Pemasukan' : 'Makanan',
     description: '',
-    wallet: 'cash'
+    wallet: defaultWalletId
   });
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const mic = () => { if (!SR) return alert('Browser tidak mendukung speech recognition. Gunakan input teks.'); const r = new SR(); r.lang = 'id-ID'; r.onresult = e => setTxt(e.results[0][0].transcript); r.onend = () => setRec(false); r.onerror = () => setRec(false); setRec(true); r.start(); };
-  const save = () => { const a = +f.amount; if (!(a > 0)) return alert('Nominal harus lebih besar dari nol'); onSave([{ ...f, id: ++uid, amount: a, date: nowS(), m: 'manual' }]); };
-  return html`<div class="fixed inset-0 z-50 flex items-end md:items-center justify-center" style=${{ background: 'rgba(0,0,0,.45)' }} onClick=${onClose}>
- <div class="cd w-full md:max-w-lg max-h-[90vh] overflow-auto !rounded-b-none md:!rounded-b-[18px]" onClick=${e => e.stopPropagation()}>
- <div class="flex justify-between items-center mb-3"><b class="text-base">Quick Input</b><button class="mu hover:opacity-80 p-1" onClick=${onClose}>${I('close', 16)}</button></div>
- <div class="in p-1 flex mb-4 pill">${[['manual', 'Manual'], ['ai', 'AI Chat'], ['voice', 'Voice']].map(([k, l]) => html`<button key=${k} onClick=${() => setTab(k)} class=${'flex-1 py-2 pill font-semibold ' + (tab === k ? 'dk' : '')}>${l}</button>`)}</div>
- ${tab === 'manual' ? html`<div class="grid grid-cols-2 gap-3"><select value=${f.type} onChange=${e => setF({ ...f, type: e.target.value })}><option value="expense">Pengeluaran</option><option value="income">Pemasukan</option></select>
-  <input type="number" placeholder="Nominal" value=${f.amount} onChange=${e => setF({ ...f, amount: e.target.value })}/>
-  <select value=${f.category} onChange=${e => setF({ ...f, category: e.target.value })}>${CATS.map(c => html`<option key=${c}>${c}</option>`)}</select>
-  <select value=${f.wallet} onChange=${e => setF({ ...f, wallet: e.target.value })}>${WAL.map(w => html`<option key=${w.id} value=${w.id}>${w.n}</option>`)}</select>
-  <input class="col-span-2" placeholder="Deskripsi" value=${f.description} onChange=${e => setF({ ...f, description: e.target.value })}/><button class="b ac col-span-2" onClick=${save}>Simpan Transaksi</button></div>`
-      : html`<div><textarea rows="3" placeholder=${tab === 'ai' ? 'Contoh: beli makan 20 ribu, bensin 25 ribu, dapat uang freelance 500 ribu' : 'Tekan mikrofon lalu bicara, atau ketik di sini'} value=${txt} onChange=${e => setTxt(e.target.value)}></textarea>
- <div class="flex gap-2 mt-3">${tab === 'voice' && html`<button class=${'b flex items-center gap-1.5 ' + (rec ? 'ac' : '')} onClick=${mic}>${I('mic', 15)}${rec ? 'Mendengarkan…' : 'Mikrofon'}</button>`}<button class="b dk flex-1" onClick=${() => setRes(parse(txt, tab === 'ai' ? 'ai_chat' : 'voice'))}>Ekstrak Transaksi</button></div>
- ${res.length > 0 && html`<div class="mt-4"><div class="mu mb-2">Periksa hasil ekstraksi sebelum disimpan:</div>${res.map(r => html`<div key=${r.id} class="in p-3 mb-2 flex items-center gap-2"><div class="flex-1 min-w-0"><div class="font-semibold truncate">${r.description}</div><div class="text-[11px] mu flex items-center gap-1.5"><span class="w-4 h-4 in rounded flex items-center justify-center">${CatIcon(r.category, 11)}</span>${r.category} · ${r.type === 'income' ? 'Pemasukan' : 'Pengeluaran'}</div></div>
- <input class="!w-28" type="number" value=${r.amount} onChange=${e => setRes(res.map(x => x.id === r.id ? { ...x, amount: +e.target.value } : x))}/><button class="mu hover:text-red-500 p-1" onClick=${() => setRes(res.filter(x => x.id !== r.id))}>${I('trash', 15)}</button></div>`)}
- <div class="flex gap-2 mt-3"><button class="b flex-1" onClick=${() => setRes([])}>Batal</button><button class="b ac flex-1" onClick=${() => onSave(res)}>Konfirmasi ${res.length}</button></div></div>`}</div>`}</div></div>`;
+
+  const availableCategories = (categories && categories.length > 0)
+    ? categories.filter(c => f.type === 'income' ? c.type === 'income' : c.type === 'expense').map(c => c.name)
+    : (f.type === 'income' ? ['Pemasukan', 'Investasi', 'Bonus', 'Gaji', 'Lainnya'] : ['Makanan', 'Transportasi', 'Hiburan', 'Belanja', 'Tagihan', 'Lainnya']);
+
+  const quickAmounts = [20000, 50000, 100000, 250000, 500000];
+
+  const handleQuickAdd = (amt) => {
+    const cur = Number(f.amount || 0);
+    setF({ ...f, amount: String(cur + amt) });
+  };
+
+  const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+  const mic = () => {
+    if (!SR) return alert('Browser tidak mendukung speech recognition. Gunakan input teks.');
+    const r = new SR();
+    r.lang = 'id-ID';
+    r.onresult = e => setTxt(e.results[0][0].transcript);
+    r.onend = () => setRec(false);
+    r.onerror = () => setRec(false);
+    setRec(true);
+    r.start();
+  };
+
+  const save = () => {
+    const a = Number(f.amount);
+    if (!a || a <= 0) return alert('Masukkan nominal transaksi yang valid.');
+    onSave([{
+      ...f,
+      id: ++uid,
+      amount: a,
+      description: f.description.trim() || (f.type === 'income' ? 'Pemasukan' : f.category),
+      date: nowS(),
+      m: 'manual'
+    }]);
+  };
+
+  return html`
+    <div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" style=${{ background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(3px)' }} onClick=${onClose}>
+      <div class="cd w-full sm:max-w-[400px] max-h-[92vh] overflow-y-auto !rounded-b-none sm:!rounded-3xl p-4 sm:p-5 shadow-2xl relative" onClick=${e => e.stopPropagation()}>
+        <div class="flex justify-between items-center mb-3">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-[#f26a2e]"></span>
+            <b class="text-sm sm:text-base font-bold">Quick Input</b>
+          </div>
+          <button class="ib !w-7 !h-7 mu hover:opacity-80" onClick=${onClose}>
+            ${I('close', 14)}
+          </button>
+        </div>
+
+        <div class="in p-1 flex mb-3 pill text-xs">
+          ${[['manual', 'Manual'], ['ai', 'AI Chat'], ['voice', 'Voice']].map(([k, l]) => html`
+            <button
+              key=${k}
+              type="button"
+              onClick=${() => setTab(k)}
+              class=${`flex-1 py-1.5 pill font-semibold transition ${tab === k ? 'dk shadow-sm' : 'mu hover:text-[var(--tx)]'}`}
+            >
+              ${l}
+            </button>
+          `)}
+        </div>
+
+        ${tab === 'manual' ? html`
+          <div>
+            <!-- Segmented Pill Selector (Pengeluaran vs Pemasukan) -->
+            <div class="grid grid-cols-2 p-1 in rounded-xl mb-3">
+              <button
+                type="button"
+                onClick=${() => setF({ ...f, type: 'expense', category: f.category === 'Pemasukan' ? 'Makanan' : f.category })}
+                class=${`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  f.type === 'expense' ? 'bg-[#ffefe8] text-[#e04f16] shadow-sm' : 'mu hover:text-[var(--tx)]'
+                }`}
+              >
+                ${I('down', 13)} Pengeluaran
+              </button>
+              <button
+                type="button"
+                onClick=${() => setF({ ...f, type: 'income', category: 'Pemasukan' })}
+                class=${`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  f.type === 'income' ? 'bg-[#e7f7ee] text-[#169d53] shadow-sm' : 'mu hover:text-[var(--tx)]'
+                }`}
+              >
+                ${I('up', 13)} Pemasukan
+              </button>
+            </div>
+
+            <!-- Hero Amount Display -->
+            <div class="in p-3 rounded-2xl mb-2.5 flex flex-col items-center justify-center">
+              <span class="text-[10px] mu uppercase tracking-wider font-semibold mb-1">Nominal Transaksi</span>
+              <div class="flex items-center justify-center gap-1 w-full">
+                <span class="text-base font-bold text-gray-400">Rp</span>
+                <input
+                  type="number"
+                  placeholder="0"
+                  value=${f.amount}
+                  onChange=${e => setF({ ...f, amount: e.target.value })}
+                  class="!bg-transparent !border-0 text-2xl font-black text-center !p-0 max-w-[190px] focus:ring-0 outline-none"
+                  autoFocus
+                />
+              </div>
+              ${Number(f.amount) > 0 && html`
+                <div class="text-[11px] font-bold text-[#f26a2e] mt-1">${fmt(f.amount)}</div>
+              `}
+            </div>
+
+            <!-- Quick Amount Chips -->
+            <div class="flex items-center gap-1.5 mb-3 overflow-x-auto pb-0.5 no-scrollbar">
+              ${quickAmounts.map(amt => html`
+                <button
+                  key=${amt}
+                  type="button"
+                  onClick=${() => handleQuickAdd(amt)}
+                  class="px-2.5 py-1 text-[11px] font-semibold in rounded-full hover:bg-[var(--bd)] transition shrink-0"
+                >
+                  +${amt >= 1000 ? (amt / 1000) + 'rb' : amt}
+                </button>
+              `)}
+              ${Number(f.amount) > 0 && html`
+                <button
+                  type="button"
+                  onClick=${() => setF({ ...f, amount: '' })}
+                  class="px-2 py-1 text-[11px] font-medium mu hover:text-red-500 shrink-0 ml-auto"
+                >
+                  Reset
+                </button>
+              `}
+            </div>
+
+            <!-- Custom Dropdowns: Kategori & Dompet -->
+            <div class="grid grid-cols-2 gap-2 mb-3">
+              <div>
+                <label class="block text-[10px] mu font-semibold mb-1">Kategori</label>
+                <${CustomSelect}
+                  value=${f.category}
+                  options=${availableCategories}
+                  onChange=${c => setF({ ...f, category: c })}
+                  iconRenderer=${c => html`<span class="w-4 h-4 in rounded flex items-center justify-center shrink-0">${CatIcon(c, 11)}</span>`}
+                  placeholder="Kategori"
+                />
+              </div>
+
+              <div>
+                <label class="block text-[10px] mu font-semibold mb-1">Dompet</label>
+                <${CustomSelect}
+                  value=${f.wallet}
+                  options=${availableWallets}
+                  onChange=${w => setF({ ...f, wallet: w })}
+                  iconRenderer=${() => html`<span class="w-2 h-2 rounded-full bg-[#f26a2e] shrink-0"></span>`}
+                  placeholder="Dompet"
+                />
+              </div>
+            </div>
+
+            <!-- Deskripsi -->
+            <div class="mb-4">
+              <label class="block text-[10px] mu font-semibold mb-1">Keterangan (Opsional)</label>
+              <input
+                type="text"
+                placeholder="Contoh: Kopi pagi, Makan siang, dll"
+                value=${f.description}
+                onChange=${e => setF({ ...f, description: e.target.value })}
+                class="text-xs !py-2.5"
+              />
+            </div>
+
+            <!-- Tombol Simpan -->
+            <button
+              type="button"
+              onClick=${save}
+              class="b ac w-full !py-2.5 text-xs font-bold rounded-xl shadow-md hover:opacity-95 transition flex items-center justify-center gap-1.5"
+            >
+              Simpan Transaksi
+            </button>
+          </div>
+        ` : html`
+          <div>
+            <textarea
+              rows="3"
+              placeholder=${tab === 'ai' ? 'Contoh: beli makan 20 ribu, bensin 25 ribu, dapat uang freelance 500 ribu' : 'Tekan mikrofon lalu bicara, atau ketik di sini'}
+              value=${txt}
+              onChange=${e => setTxt(e.target.value)}
+              class="text-xs mb-3"
+            ></textarea>
+
+            <div class="flex gap-2 mb-3">
+              ${tab === 'voice' && html`
+                <button
+                  type="button"
+                  class=${`b flex items-center gap-1.5 text-xs ${rec ? 'ac' : ''}`}
+                  onClick=${mic}
+                >
+                  ${I('mic', 14)}
+                  ${rec ? 'Mendengarkan…' : 'Mikrofon'}
+                </button>
+              `}
+              <button
+                type="button"
+                class="b dk flex-1 text-xs"
+                onClick=${() => setRes(parse(txt, tab === 'ai' ? 'ai_chat' : 'voice'))}
+              >
+                Ekstrak Transaksi
+              </button>
+            </div>
+
+            ${res.length > 0 && html`
+              <div class="mt-3">
+                <div class="mu text-xs mb-2">Periksa hasil ekstraksi:</div>
+                ${res.map(r => html`
+                  <div key=${r.id} class="in p-2.5 mb-2 rounded-xl flex flex-col gap-2">
+                    <div class="flex items-center gap-2">
+                      <div class="flex-1 min-w-0">
+                        <div class="font-semibold text-xs truncate">${r.description}</div>
+                        <div class="text-[10px] mu flex items-center gap-1">
+                          <span class="w-3.5 h-3.5 in rounded flex items-center justify-center">${CatIcon(r.category, 10)}</span>
+                          ${r.category} · ${r.type === 'income' ? 'Pemasukan' : 'Pengeluaran'}
+                        </div>
+                      </div>
+                      <input
+                        class="!w-24 text-xs !py-1 !px-2"
+                        type="number"
+                        value=${r.amount}
+                        onChange=${e => setRes(res.map(x => x.id === r.id ? { ...x, amount: +e.target.value } : x))}
+                      />
+                      <button
+                        type="button"
+                        class="mu hover:text-red-500 p-1"
+                        onClick=${() => setRes(res.filter(x => x.id !== r.id))}
+                      >
+                        ${I('trash', 14)}
+                      </button>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-1.5">
+                      <${CustomSelect}
+                        value=${r.wallet || defaultWalletId}
+                        options=${availableWallets}
+                        onChange=${w => setRes(res.map(x => x.id === r.id ? { ...x, wallet: w } : x))}
+                        placeholder="Dompet"
+                      />
+                      <${CustomSelect}
+                        value=${r.category}
+                        options=${availableCategories}
+                        onChange=${c => setRes(res.map(x => x.id === r.id ? { ...x, category: c } : x))}
+                        placeholder="Kategori"
+                      />
+                    </div>
+                  </div>
+                `)}
+                <div class="flex gap-2 mt-3">
+                  <button type="button" class="b flex-1 text-xs" onClick=${() => setRes([])}>Batal</button>
+                  <button type="button" class="b ac flex-1 text-xs" onClick=${() => onSave(res)}>Konfirmasi ${res.length}</button>
+                </div>
+              </div>
+            `}
+          </div>
+        `}
+      </div>
+    </div>
+  `;
 }
 const DEFAULT_GOALS = [
   { id: 'g1', name: 'Dana Darurat', target_amount: 5000000, current_amount: 2300000, icon: 'target-icon' },
   { id: 'g2', name: 'Laptop Baru', target_amount: 12000000, current_amount: 4800000, icon: 'laptop' }
 ];
 
-function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals = [], wallets = [], onAddGoal }) {
+function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals = [], wallets = [], budgets = [], onOpenAddGoal }) {
   const [statPeriod, setStatPeriod] = useState('today');
   const now = new Date();
   const todayTxs = txs.filter(t => isSameDay(parseTxDate(t.date), now));
   const todayInc = todayTxs.filter(t => t.type === 'income').reduce((a, t) => a + t.amount, 0);
   const todayExp = todayTxs.filter(t => t.type === 'expense').reduce((a, t) => a + t.amount, 0);
   const activeWallets = wallets.length > 0 ? wallets.map(w => ({ id: w.id || w.name.toLowerCase(), n: w.name, b: w.initial_balance || 0, on: w.is_active ? 1 : 0 })) : (txs.length > 0 ? WAL : []);
-  const used = txs.filter(t => t.type === 'expense').reduce((a, t) => a + t.amount, 0), lim = txs.length === 0 ? 0 : 5000000;
-  const bal = w => (w.b || 0) + txs.filter(t => t.wallet === w.id || t.wallet === w.n?.toLowerCase()).reduce((a, t) => a + (t.type === 'income' ? t.amount : -t.amount), 0);
+  const used = txs.filter(t => t.type === 'expense').reduce((a, t) => a + t.amount, 0);
+  
+  // Total batas anggaran bulanan dihitung dari tabel budgets jika ada
+  const totalBudgetLimit = budgets.length > 0 ? budgets.reduce((a, b) => a + Number(b.amount || 0), 0) : 5000000;
+  const lim = txs.length === 0 && budgets.length === 0 ? 0 : totalBudgetLimit;
+
+  // Persentase komparasi dinamis (Bulan ini vs Bulan lalu)
+  const curMonth = now.getMonth();
+  const curYear = now.getFullYear();
+  const prevMonth = curMonth === 0 ? 11 : curMonth - 1;
+  const prevYear = curMonth === 0 ? curYear - 1 : curYear;
+
+  const thisMonthInc = txs.filter(t => {
+    const d = parseTxDate(t.date);
+    return d.getFullYear() === curYear && d.getMonth() === curMonth && t.type === 'income';
+  }).reduce((a, t) => a + t.amount, 0);
+
+  const prevMonthInc = txs.filter(t => {
+    const d = parseTxDate(t.date);
+    return d.getFullYear() === prevYear && d.getMonth() === prevMonth && t.type === 'income';
+  }).reduce((a, t) => a + t.amount, 0);
+
+  const thisMonthExp = txs.filter(t => {
+    const d = parseTxDate(t.date);
+    return d.getFullYear() === curYear && d.getMonth() === curMonth && t.type === 'expense';
+  }).reduce((a, t) => a + t.amount, 0);
+
+  const prevMonthExp = txs.filter(t => {
+    const d = parseTxDate(t.date);
+    return d.getFullYear() === prevYear && d.getMonth() === prevMonth && t.type === 'expense';
+  }).reduce((a, t) => a + t.amount, 0);
+
+  const incChangePct = prevMonthInc > 0 ? Math.round(((thisMonthInc - prevMonthInc) / prevMonthInc) * 100) : 0;
+  const expChangePct = prevMonthExp > 0 ? Math.round(((thisMonthExp - prevMonthExp) / prevMonthExp) * 100) : 0;
+  const bal = w => {
+    const base = w.b || w.initial_balance || 0;
+    const wId = String(w.id || '').toLowerCase();
+    const wName = String(w.n || w.name || '').toLowerCase();
+    return base + txs.filter(t => {
+      const tw = String(t.wallet || '').toLowerCase();
+      return tw === wId || tw === wName;
+    }).reduce((a, t) => a + (t.type === 'income' ? t.amount : -t.amount), 0);
+  };
 
   // Dynamic monthly chart from real transactions
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-  const curYear = now.getFullYear();
   const chartData = txs.length === 0 ? [] : monthNames.slice(0, Math.max(now.getMonth() + 1, 6)).map((m, idx) => {
     const mInc = txs.filter(t => {
       const d = parseTxDate(t.date);
@@ -192,7 +558,10 @@ function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals 
     <div>
      <div class="flex justify-between items-center"><span class="mu">Total Saldo</span><span class="in pill px-2.5 py-1 text-[11px] flex items-center gap-1 font-medium">IDR ${I('chev', 12)}</span></div>
      <div class="text-[26px] font-bold mt-1">${fmt(tot)}</div>
-     <div class="mt-1 flex items-center gap-1.5"><span class="badge flex items-center gap-1">${I('up', 11)} 5%</span> <span class="mu text-[11px]">dari bulan lalu</span></div>
+     <div class="mt-1 flex items-center gap-1.5">
+       <span class="badge flex items-center gap-1">${I(incChangePct >= 0 ? 'up' : 'down', 11)} ${Math.abs(incChangePct)}%</span> 
+       <span class="mu text-[11px]">dari bulan lalu</span>
+     </div>
      <div class="grid grid-cols-2 gap-2 mt-4">
       <button class="b dk flex items-center justify-center gap-1.5 !py-3 font-semibold transition-all hover:opacity-90 cursor-pointer" onClick=${() => open('income')}>
        ${I('plus', 14)} Pemasukan
@@ -224,26 +593,28 @@ function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals 
      <${Stat} ac=${true}
        l=${statPeriod === 'today' ? 'Pemasukan Hari Ini' : 'Total Pemasukan'}
        v=${fmt(statPeriod === 'today' ? todayInc : inc)}
+       smallVal=${true}
        ic="wal"
-       bd=${statPeriod === 'today' ? (todayTxs.filter(t => t.type === 'income').length + ' trx') : '↑ 7%'}
+       bd=${statPeriod === 'today' ? (todayTxs.filter(t => t.type === 'income').length + ' trx') : (incChangePct >= 0 ? `↑ ${incChangePct}%` : `↓ ${Math.abs(incChangePct)}%`)}
        sub=${statPeriod === 'today' ? 'hari ini' : 'bulan ini'}/>
      <${Stat}
        l=${statPeriod === 'today' ? 'Pengeluaran Hari Ini' : 'Total Pengeluaran'}
        v=${fmt(statPeriod === 'today' ? todayExp : exp)}
        ic="card"
-       bd=${statPeriod === 'today' ? (todayTxs.filter(t => t.type === 'expense').length + ' trx') : '↑ 5%'}
+       bd=${statPeriod === 'today' ? (todayTxs.filter(t => t.type === 'expense').length + ' trx') : (expChangePct >= 0 ? `↑ ${expChangePct}%` : `↓ ${Math.abs(expChangePct)}%`)}
        sub=${statPeriod === 'today' ? 'hari ini' : 'bulan ini'}/>
      <${Stat}
        l="Selisih Bersih"
        v=${fmt(statPeriod === 'today' ? (todayInc - todayExp) : (inc - exp))}
+       smallVal=${true}
        ic="swap"
-       bd=${statPeriod === 'today' ? 'Net' : '↑ 8%'}
+       bd=${statPeriod === 'today' ? 'Net' : 'Bulan ini'}
        sub=${statPeriod === 'today' ? 'hari ini' : 'bulan ini'}/>
      <${Stat}
        l="Rasio Pengeluaran"
        v=${(statPeriod === 'today' ? (todayInc ? Math.round(todayExp / todayInc * 100) : 0) : (inc ? Math.round(exp / inc * 100) : 0)) + '%'}
        ic="pct"
-       bd=${statPeriod === 'today' ? (todayTxs.length + ' trx') : '↑ 4%'}
+       bd=${statPeriod === 'today' ? (todayTxs.length + ' trx') : (txs.length + ' trx')}
        sub=${statPeriod === 'today' ? 'hari ini' : 'bulan ini'}/>
     </div>
    </div>
@@ -293,7 +664,7 @@ function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals 
        })}
       </div>
      </div>
-     <button class="b !py-2 !text-[11px] flex items-center justify-center gap-1.5 mt-2.5 w-full font-semibold" style=${{ border: '1px solid var(--bd)', background: 'var(--cd)' }} onClick=${() => go('target')}>
+     <button class="b !py-2 !text-[11px] flex items-center justify-center gap-1.5 mt-2.5 w-full font-semibold" style=${{ border: '1px solid var(--bd)', background: 'var(--cd)' }} onClick=${onOpenAddGoal || (() => go('target'))}>
       ${I('plus', 12)} Tambah Target Baru
      </button>
     </div>
@@ -341,35 +712,255 @@ function AI({ txs, tot, inc, exp, spent, open }) {
   <div class="flex gap-2 mt-2"><button class="ib" style=${{ background: 'var(--in)' }} onClick=${() => open('voice')}>${I('mic', 16)}</button><input placeholder="Tanya keuangan Anda (misal: rincian hari ini)…" value=${v} onChange=${e => setV(e.target.value)} onKeyDown=${e => e.key === 'Enter' && send()}/><button class="b ac" onClick=${send}>Kirim</button></div>
   <button class="text-[11px] mu mt-2 text-left" onClick=${() => open('ai')}>Catat transaksi lewat bahasa sehari-hari ${I('arrow-right', 12)}</button></div>`;
 }
-const Budget = ({ spent }) => html`<div class="grid gap-3 md:grid-cols-2">${BUD.map(([c, a]) => { const u = spent[c] || 0, p = u / a * 100; return html`<div key=${c} class="cd"><div class="flex justify-between"><b class="flex items-center gap-1.5"><span class="w-5 h-5 in rounded flex items-center justify-center mu">${CatIcon(c, 13)}</span>${c}</b><span class="mu">${Math.round(p)}%</span></div><div class="bar my-3"><i style=${{ width: Math.min(100, p) + '%', background: p > 85 ? '#d93025' : '' }}></i></div><div class="mu">Terpakai ${fmt(u)} · Sisa ${fmt(Math.max(0, a - u))}</div>${p > 85 && html`<div class="mt-2" style=${{ color: '#d93025' }}>⚠ Mendekati batas anggaran</div>`}</div>` })}</div>`;
-const Goals = ({ goals = DEFAULT_GOALS }) => html`<div class="grid gap-3 md:grid-cols-2">${goals.map(g => {
-  const pct = g.target_amount ? Math.min(100, Math.round(g.current_amount / g.target_amount * 100)) : 0;
-  return html`<div key=${g.id || g.name} class="cd"><div class="flex justify-between"><b class="flex items-center gap-1.5"><span class="w-6 h-6 in rounded flex items-center justify-center mu">${I(g.icon === 'laptop' || (g.name || '').toLowerCase().includes('laptop') ? 'laptop' : 'target-icon', 14)}</span>${g.name}</b><span class="mu font-bold">${pct}%</span></div><div class="bar my-3"><i style=${{ width: pct + '%' }}></i></div><div class="mu text-xs">Terkumpul <b>${fmt(g.current_amount)}</b> dari ${fmt(g.target_amount)}</div></div>`;
-})}</div>`;
+function Budget({ spent, budgets = [], onSaveBudget, categories = [] }) {
+  const [editingCat, setEditingCat] = useState(null);
+  const [newAmount, setNewAmount] = useState('');
+
+  const catList = categories.length > 0 ? categories.filter(c => c.type === 'expense').map(c => c.name) : ['Makanan', 'Transportasi', 'Hiburan', 'Belanja'];
+
+  // Gabungkan budget dari database dengan kategori yang ada
+  const budgetMap = {};
+  budgets.forEach(b => {
+    budgetMap[b.category_name] = b.amount;
+  });
+
+  const handleOpenEdit = (c, currentVal) => {
+    setEditingCat(c);
+    setNewAmount(String(currentVal || 0));
+  };
+
+  const handleSave = async (c) => {
+    const val = Number(newAmount);
+    if (isNaN(val) || val <= 0) return alert('Nominal anggaran harus lebih besar dari 0');
+    await onSaveBudget(c, val);
+    setEditingCat(null);
+  };
+
+  return html`<div class="space-y-4">
+    <div class="flex justify-between items-center">
+      <div>
+        <h2 class="text-base font-bold">Anggaran Kategori Bulanan</h2>
+        <p class="text-xs mu">Atur batas pengeluaran untuk masing-masing kategori pengeluaran Anda.</p>
+      </div>
+    </div>
+    <div class="grid gap-3 md:grid-cols-2">
+      ${catList.map(c => {
+        const a = budgetMap[c] || 0;
+        const u = spent[c] || 0;
+        const p = a > 0 ? Math.round(u / a * 100) : 0;
+        const isEditing = editingCat === c;
+
+        return html`<div key=${c} class="cd">
+          <div class="flex justify-between items-center">
+            <b class="flex items-center gap-1.5">
+              <span class="w-6 h-6 in rounded flex items-center justify-center mu">${CatIcon(c, 13)}</span>
+              ${c}
+            </b>
+            <div class="flex items-center gap-2">
+              <span class="mu text-xs font-semibold">${p}%</span>
+              <button class="in pill px-2 py-0.5 text-[10px] mu hover:opacity-80" onClick=${() => handleOpenEdit(c, a)}>
+                ${a > 0 ? 'Ubah' : '+ Pasang'}
+              </button>
+            </div>
+          </div>
+
+          ${isEditing ? html`
+            <div class="flex gap-2 my-2.5">
+              <input type="number" class="flex-1 !py-1 text-xs" placeholder="Batas nominal" value=${newAmount} onChange=${e => setNewAmount(e.target.value)}/>
+              <button class="b dk !py-1 !px-2.5 text-xs font-semibold" onClick=${() => handleSave(c)}>Simpan</button>
+              <button class="b !py-1 !px-2 text-xs" onClick=${() => setEditingCat(null)}>Batal</button>
+            </div>
+          ` : html`
+            <div class="bar my-3"><i style=${{ width: Math.min(100, p) + '%', background: p > 85 ? '#d93025' : '' }}></i></div>
+            <div class="mu text-xs flex justify-between">
+              <span>Terpakai <b>${fmt(u)}</b></span>
+              <span>Batas ${a > 0 ? fmt(a) : 'Belum diatur'}</span>
+            </div>
+            ${p > 85 && a > 0 && html`<div class="mt-2 text-xs font-medium" style=${{ color: '#d93025' }}>⚠ Pengeluaran telah melebihi 85% batas anggaran</div>`}
+          `}
+        </div>`;
+      })}
+    </div>
+  </div>`;
+}
+
+function Goals({ goals = [], onOpenAdd, onAddSavings, onDeleteGoal }) {
+  const [topUpGoal, setTopUpGoal] = useState(null);
+  const [topUpAmount, setTopUpAmount] = useState('');
+
+  const handleTopUpSubmit = async (g) => {
+    const val = Number(topUpAmount);
+    if (!val || val <= 0) return alert('Nominal harus lebih dari 0');
+    await onAddSavings(g.id, val);
+    setTopUpGoal(null);
+    setTopUpAmount('');
+  };
+
+  return html`<div class="space-y-4">
+    <div class="flex justify-between items-center">
+      <div>
+        <h2 class="text-base font-bold">Target Tabungan & Impian</h2>
+        <p class="text-xs mu">Pantau progres tabungan dan impian keuangan Anda secara riil.</p>
+      </div>
+      <button class="b dk !py-2 !px-3.5 !text-xs font-semibold flex items-center gap-1.5 shadow-sm" onClick=${onOpenAdd}>
+        ${I('plus', 13)} Tambah Target
+      </button>
+    </div>
+
+    ${goals.length === 0 ? html`
+      <div class="cd text-center py-12 flex flex-col items-center justify-center gap-2">
+        <div class="w-12 h-12 in rounded-full flex items-center justify-center mu">${I('target-icon', 24)}</div>
+        <b class="text-sm">Belum Ada Target Tabungan</b>
+        <p class="text-xs mu max-w-sm">Mulai buat target impian Anda, misalnya Dana Darurat, Gadget Baru, Liburan, atau Modal Usaha.</p>
+        <button class="b dk !py-2 !px-4 !text-xs mt-2" onClick=${onOpenAdd}>+ Buat Target Pertama</button>
+      </div>
+    ` : html`
+      <div class="grid gap-3 md:grid-cols-2">
+        ${goals.map(g => {
+          const pct = g.target_amount ? Math.min(100, Math.round(g.current_amount / g.target_amount * 100)) : 0;
+          const isAchieved = g.status === 'achieved' || pct >= 100;
+          const isToppingUp = topUpGoal === g.id;
+
+          return html`<div key=${g.id || g.name} class="cd flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-start">
+                <b class="flex items-center gap-2 text-sm">
+                  <span class="w-7 h-7 in rounded-lg flex items-center justify-center mu text-sm">
+                    ${I(g.icon === 'laptop' || (g.name || '').toLowerCase().includes('laptop') ? 'laptop' : 'target-icon', 15)}
+                  </span>
+                  <div>
+                    <div>${g.name}</div>
+                    ${g.target_date && html`<div class="text-[10px] mu font-normal">Target: ${new Date(g.target_date).toLocaleDateString('id-ID', { month: 'short', year: 'numeric' })}</div>`}
+                  </div>
+                </b>
+                <div class="flex items-center gap-1.5">
+                  <span class=${'text-xs font-bold px-2 py-0.5 rounded-full ' + (isAchieved ? 'bg-[#1a9a4a]/15 text-[#1a9a4a]' : 'in mu')}>${pct}%</span>
+                  <button class="mu hover:text-red-500 p-1" title="Hapus Target" onClick=${() => onDeleteGoal(g.id)}>${I('trash', 13)}</button>
+                </div>
+              </div>
+              <div class="bar my-3"><i style=${{ width: pct + '%', background: isAchieved ? '#1a9a4a' : '' }}></i></div>
+              <div class="flex justify-between text-xs mu">
+                <span>Terkumpul <b class="text-[var(--fg)]">${fmt(g.current_amount)}</b></span>
+                <span>Target ${fmt(g.target_amount)}</span>
+              </div>
+            </div>
+
+            ${isToppingUp ? html`
+              <div class="flex gap-2 mt-3 pt-3 border-t border-[var(--bd)]">
+                <input type="number" class="flex-1 !py-1 text-xs" placeholder="Nominal tabungan" value=${topUpAmount} onChange=${e => setTopUpAmount(e.target.value)}/>
+                <button class="b dk !py-1 !px-2.5 text-xs font-semibold" onClick=${() => handleTopUpSubmit(g)}>Simpan</button>
+                <button class="b !py-1 !px-2 text-xs" onClick=${() => setTopUpGoal(null)}>Batal</button>
+              </div>
+            ` : html`
+              <div class="flex justify-between items-center mt-3 pt-2.5 border-t border-[var(--bd)]">
+                <span class="text-[10px] mu font-medium">${isAchieved ? '🎉 Target Tercapai!' : `Kurang ${fmt(Math.max(0, g.target_amount - g.current_amount))}`}</span>
+                <button class="in pill px-2.5 py-1 text-xs font-semibold hover:opacity-80 flex items-center gap-1" onClick=${() => { setTopUpGoal(g.id); setTopUpAmount(''); }}>
+                  ${I('plus', 11)} Tambah Tabungan
+                </button>
+              </div>
+            `}
+          </div>`;
+        })}
+      </div>
+    `}
+  </div>`;
+}
+
+function AddGoalModal({ onClose, onSave }) {
+  const [f, setF] = useState({ name: '', target_amount: '', current_amount: '', target_date: '' });
+  const handleSubmit = () => {
+    const target = Number(f.target_amount);
+    if (!f.name.trim()) return alert('Nama target harus diisi');
+    if (!target || target <= 0) return alert('Nominal target harus lebih dari 0');
+    onSave({
+      name: f.name.trim(),
+      target_amount: target,
+      current_amount: Number(f.current_amount) || 0,
+      target_date: f.target_date || undefined
+    });
+  };
+
+  return html`<div class="fixed inset-0 z-50 flex items-end md:items-center justify-center" style=${{ background: 'rgba(0,0,0,.45)' }} onClick=${onClose}>
+    <div class="cd w-full md:max-w-md max-h-[90vh] overflow-auto !rounded-b-none md:!rounded-b-[18px]" onClick=${e => e.stopPropagation()}>
+      <div class="flex justify-between items-center mb-4">
+        <b class="text-base flex items-center gap-2">${I('target-icon', 16)} Tambah Target Tabungan</b>
+        <button class="mu hover:opacity-80 p-1" onClick=${onClose}>${I('close', 16)}</button>
+      </div>
+      <div class="flex flex-col gap-3 text-xs">
+        <div>
+          <label class="block mb-1 font-semibold mu">Nama Target / Impian</label>
+          <input class="w-full" placeholder="Misal: Dana Darurat, Laptop Baru, Liburan" value=${f.name} onChange=${e => setF({ ...f, name: e.target.value })}/>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block mb-1 font-semibold mu">Target Nominal (Rp)</label>
+            <input type="number" class="w-full" placeholder="5000000" value=${f.target_amount} onChange=${e => setF({ ...f, target_amount: e.target.value })}/>
+          </div>
+          <div>
+            <label class="block mb-1 font-semibold mu">Saldo Awal Terkumpul</label>
+            <input type="number" class="w-full" placeholder="0" value=${f.current_amount} onChange=${e => setF({ ...f, current_amount: e.target.value })}/>
+          </div>
+        </div>
+        <div>
+          <label class="block mb-1 font-semibold mu">Target Selesai (Opsional)</label>
+          <input type="date" class="w-full" value=${f.target_date} onChange=${e => setF({ ...f, target_date: e.target.value })}/>
+        </div>
+        <div class="flex gap-2 mt-3 pt-2 border-t border-[var(--bd)]">
+          <button class="b flex-1" onClick=${onClose}>Batal</button>
+          <button class="b dk flex-1 font-semibold" onClick=${handleSubmit}>Simpan Target</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
 const Report = ({ toast }) => html`<div class="cd"><b>Laporan Keuangan</b><p class="mu mt-1">Ekspor laporan harian, mingguan, bulanan, atau tahunan.</p><div class="flex gap-2 mt-3"><button class="b dk" onClick=${() => toast('Ekspor CSV tersedia setelah backend terhubung')}>Ekspor CSV</button><button class="b" onClick=${() => toast('Ekspor PDF tersedia setelah backend terhubung')}>Ekspor PDF</button></div></div>`;
 const TABS = [['overview', 'Overview'], ['transaksi', 'Transaksi'], ['ai', 'AI Assistant'], ['anggaran', 'Anggaran'], ['target', 'Target'], ['laporan', 'Laporan']];
 const RAIL = [['grid', 'overview'], ['cal', 'transaksi'], ['mail', 'ai'], ['doc', 'laporan'], ['users', 'target'], ['layers', 'anggaran'], ['cog', 'overview']];
 function App() {
-  const [tab, setTab] = useState('overview'), [txPeriod, setTxPeriod] = useState('all'), [txs, setTxs] = useState([]), [goals, setGoals] = useState([]), [wallets, setWallets] = useState([]), [modal, setModal] = useState(null), [msg, setMsg] = useState(''), [dark, setDark] = useState(false);
-  const [user, setUser] = useState(null), [userMenu, setUserMenu] = useState(false);
+  const [tab, setTab] = useState('overview'), [txPeriod, setTxPeriod] = useState('all'), [txs, setTxs] = useState([]), [goals, setGoals] = useState([]), [wallets, setWallets] = useState([]), [budgets, setBudgets] = useState([]), [categories, setCategories] = useState([]), [modal, setModal] = useState(null), [goalModalOpen, setGoalModalOpen] = useState(false), [msg, setMsg] = useState(''), [dark, setDark] = useState(false);
+  const [user, setUser] = useState(null), [userMenu, setUserMenu] = useState(false), [loadingAuth, setLoadingAuth] = useState(true), [loadingData, setLoadingData] = useState(false);
   const toast = m => { setMsg(m); setTimeout(() => setMsg(''), 2400) };
 
-  const loadUserData = (u) => {
+  const loadUserData = async (u) => {
     if (u) {
-      fetchUserTransactions().then(remoteTxs => setTxs(remoteTxs || []));
-      fetchUserGoals().then(remoteGoals => setGoals(remoteGoals || []));
-      fetchUserWallets().then(remoteWallets => setWallets(remoteWallets && remoteWallets.length > 0 ? remoteWallets : []));
+      setLoadingData(true);
+      try {
+        const [remoteTxs, remoteGoals, remoteWallets, remoteBudgets, remoteCats] = await Promise.all([
+          fetchUserTransactions(),
+          fetchUserGoals(),
+          fetchUserWallets(),
+          fetchUserBudgets(),
+          fetchCategories(),
+        ]);
+        React.startTransition(() => {
+          setTxs(remoteTxs || []);
+          setGoals(remoteGoals || []);
+          setWallets(remoteWallets && remoteWallets.length > 0 ? remoteWallets : []);
+          setBudgets(remoteBudgets || []);
+          setCategories(remoteCats || []);
+          setLoadingData(false);
+        });
+      } catch (err) {
+        console.error('Error loading user data:', err);
+        setLoadingData(false);
+      }
     } else {
-      // Demo fallback only for guest / non-logged in visitor
-      setTxs(T0);
-      setGoals(DEFAULT_GOALS);
-      setWallets(WAL);
+      setTxs([]);
+      setGoals([]);
+      setWallets([]);
+      setBudgets([]);
+      setLoadingData(false);
     }
   };
 
   useEffect(() => {
     getSessionUser().then(u => {
+      if (!u) {
+        window.location.href = '/login';
+        return;
+      }
       setUser(u);
+      setLoadingAuth(false);
       loadUserData(u);
     });
 
@@ -383,10 +974,12 @@ function App() {
             fullName: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Pengguna',
           };
           setUser(u);
+          setLoadingAuth(false);
           loadUserData(u);
         } else {
           setUser(null);
           loadUserData(null);
+          window.location.href = '/login';
         }
       });
       return () => subscription?.unsubscribe();
@@ -400,6 +993,7 @@ function App() {
   const activeWalletsList = wallets.length > 0 ? wallets : (user ? [] : WAL);
   const tot = activeWalletsList.reduce((a, w) => a + (w.initial_balance || w.b || 0), 0) + inc - exp;
 
+  // Optimistic UI updates untuk transaksi
   const save = async l => {
     setTxs([...l, ...txs]);
     setModal(null);
@@ -407,11 +1001,91 @@ function App() {
     if (user) {
       for (const t of l) {
         try {
-          await insertTransaction(t);
+          const inserted = await insertTransaction(t);
+          if (inserted && inserted.id) {
+            setTxs(prev => prev.map(item => item.id === t.id ? { ...item, id: inserted.id } : item));
+          }
         } catch (e) {
           console.error('Failed to sync to Supabase:', e);
+          toast('Gagal sinkronisasi transaksi ke cloud');
         }
       }
+    }
+  };
+
+  const handleSaveGoal = async (newGoalData) => {
+    try {
+      if (user) {
+        const saved = await insertGoal(newGoalData);
+        if (saved) {
+          setGoals([...goals, {
+            id: saved.id,
+            name: saved.name,
+            target_amount: Number(saved.target_amount),
+            current_amount: Number(saved.current_amount || 0),
+            target_date: saved.target_date,
+            status: saved.status,
+            icon: saved.name.toLowerCase().includes('laptop') ? '💻' : '🎯',
+          }]);
+        }
+      } else {
+        setGoals([...goals, { ...newGoalData, id: 'g' + Date.now() }]);
+      }
+      setGoalModalOpen(false);
+      toast('Target tabungan berhasil dibuat');
+    } catch (e) {
+      toast('Gagal menyimpan target: ' + (e.message || 'Error'));
+    }
+  };
+
+  const handleAddSavings = async (goalId, addedAmount) => {
+    // Optimistic update
+    setGoals(prev => prev.map(g => g.id === goalId ? { ...g, current_amount: g.current_amount + addedAmount } : g));
+    toast('Tabungan berhasil ditambahkan');
+    try {
+      if (user) {
+        await updateGoalAmount(goalId, addedAmount);
+      }
+    } catch (e) {
+      // Revert if error
+      setGoals(prev => prev.map(g => g.id === goalId ? { ...g, current_amount: g.current_amount - addedAmount } : g));
+      toast('Gagal menambah tabungan: ' + (e.message || 'Error'));
+    }
+  };
+
+  const handleDeleteGoal = async (goalId) => {
+    if (!confirm('Yakin ingin menghapus target ini?')) return;
+    const prevGoals = [...goals];
+    // Optimistic update
+    setGoals(prev => prev.filter(g => g.id !== goalId));
+    toast('Target tabungan dihapus');
+    try {
+      if (user) {
+        await deleteGoal(goalId);
+      }
+    } catch (e) {
+      setGoals(prevGoals);
+      toast('Gagal menghapus target: ' + (e.message || 'Error'));
+    }
+  };
+
+  const handleSaveBudget = async (categoryName, amount) => {
+    const existing = budgets.find(b => b.category_name === categoryName);
+    const prevBudgets = [...budgets];
+    // Optimistic update
+    if (existing) {
+      setBudgets(prev => prev.map(b => b.category_name === categoryName ? { ...b, amount } : b));
+    } else {
+      setBudgets(prev => [...prev, { category_name: categoryName, amount, period: 'monthly' }]);
+    }
+    toast(`Anggaran ${categoryName} diperbarui`);
+    try {
+      if (user) {
+        await upsertBudget(categoryName, amount);
+      }
+    } catch (e) {
+      setBudgets(prevBudgets);
+      toast('Gagal memperbarui anggaran: ' + (e.message || 'Error'));
     }
   };
 
@@ -428,10 +1102,37 @@ function App() {
 
   const theme = d => { setDark(d); document.documentElement.dataset.theme = d ? 'dark' : 'light' };
   const goPeriod = p => { setTxPeriod(p); setTab('transaksi'); };
-  const P = { txs, tot, inc, exp, spent, goals, wallets: activeWalletsList, open: setModal, go: setTab, goPeriod, toast };
+  const P = { 
+    txs, 
+    tot, 
+    inc, 
+    exp, 
+    spent, 
+    goals, 
+    budgets,
+    wallets: activeWalletsList, 
+    open: setModal, 
+    go: setTab, 
+    goPeriod, 
+    toast,
+    onOpenAddGoal: () => setGoalModalOpen(true),
+    onSaveBudget: handleSaveBudget,
+    onAddSavings: handleAddSavings,
+    onDeleteGoal: handleDeleteGoal,
+    categories
+  };
 
-  const displayName = user ? (user.fullName || user.email?.split('@')[0] || 'Pengguna') : 'Sajibur';
-  const initialLetter = (displayName ? displayName.charAt(0) : 'S').toUpperCase();
+  const displayName = user ? (user.fullName || user.email?.split('@')[0] || 'Pengguna') : '';
+  const initialLetter = (displayName ? displayName.charAt(0) : 'U').toUpperCase();
+
+  if (loadingAuth) {
+    return html`<div class="min-h-screen flex items-center justify-center p-4">
+      <div class="flex flex-col items-center gap-3">
+        <img src="/new_icon.svg" class="w-12 h-12 rounded-full animate-pulse" alt="Dompetku Logo" />
+        <span class="text-xs mu font-medium">Memeriksa autentikasi...</span>
+      </div>
+    </div>`;
+  }
 
   return html`<div class="p-2 md:p-4"><div class="fr p-3 md:p-5 md:flex md:gap-4 min-h-[calc(100vh-32px)]" style=${{ borderRadius: 24 }}>
  <aside class="hidden md:flex flex-col items-center gap-3 pt-14 w-11 shrink-0"><div class="cd !p-1 !rounded-full flex flex-col gap-1"><button class=${'ib ' + (!dark ? 'dk' : '')} onClick=${() => theme(false)}>${I('sun', 16)}</button><button class=${'ib ' + (dark ? 'dk' : '')} onClick=${() => theme(true)}>${I('moon', 16)}</button></div>
@@ -439,19 +1140,19 @@ function App() {
   <div class="cd !p-1 !rounded-full flex flex-col gap-1 mt-auto"><button class="ib" onClick=${() => toast('Pusat bantuan')}>${I('help', 16)}</button><button class="ib" onClick=${user ? handleLogout : () => { window.location.href = '/login'; }}>${I('out', 16)}</button></div></aside>
  <div class="flex-1 min-w-0">
   <header class="flex items-center justify-between gap-2 mb-5">
-   <div class="cd !p-1.5 !pr-4 pill flex items-center gap-2 font-bold"><img src="/new_icon.svg" class="w-8 h-8 rounded-full object-cover" alt="Dompetku Logo" />Dompetku</div>
-   <nav class="hidden lg:flex cd !p-1.5 pill gap-1">${TABS.map(([k, l]) => html`<button key=${k} onClick=${() => setTab(k)} class=${'px-4 py-2 pill font-medium ' + (tab === k ? 'dk' : '')}>${l}</button>`)}</nav>
-   <div class="flex items-center gap-2"><div class="hidden md:flex cd !p-1.5 pill gap-1"><button class="ib" style=${{ background: 'var(--in)' }} onClick=${() => setModal('manual')}>${I('search', 15)}</button><button class="ib" style=${{ background: 'var(--in)' }} onClick=${() => toast('Tidak ada notifikasi baru')}>${I('bell', 15)}</button><button class="ib" style=${{ background: 'var(--in)' }} onClick=${() => setModal('voice')}>${I('mic', 15)}</button></div>
+   <div class="cd !py-1 !px-2.5 !pr-3.5 pill flex items-center gap-2 font-bold text-xs"><img src="/new_icon.svg" class="w-6 h-6 rounded-full object-cover" alt="Dompetku Logo" />Dompetku${loadingData && html`<span class="w-1.5 h-1.5 rounded-full bg-[var(--ac)] animate-ping ml-0.5" title="Menyinkronkan data..."></span>`}</div>
+   <nav class="hidden lg:flex cd !py-1 !px-1.5 pill gap-0.5">${TABS.map(([k, l]) => html`<button key=${k} onClick=${() => setTab(k)} class=${'px-3 py-1.5 pill font-semibold text-xs transition ' + (tab === k ? 'dk shadow-sm' : 'mu hover:text-[var(--tx)]')}>${l}</button>`)}</nav>
+   <div class="flex items-center gap-2"><div class="hidden md:flex cd !p-0.5 pill gap-0.5"><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => setModal('manual')}>${I('search', 13)}</button><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => toast('Tidak ada notifikasi baru')}>${I('bell', 13)}</button><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => setModal('voice')}>${I('mic', 13)}</button></div>
    
    <div class="relative">
     ${user ? html`
-      <div class="cd !p-1.5 !pr-3 pill flex items-center gap-2 cursor-pointer select-none" onClick=${() => setUserMenu(!userMenu)}>
-        <span class="w-8 h-8 pill dk flex items-center justify-center font-bold text-xs uppercase">${initialLetter}</span>
+      <div class="cd !py-1 !px-1.5 !pr-3 pill flex items-center gap-1.5 cursor-pointer select-none" onClick=${() => setUserMenu(!userMenu)}>
+        <span class="w-6 h-6 pill dk flex items-center justify-center font-bold text-[10px] uppercase">${initialLetter}</span>
         <span class="hidden sm:block leading-tight text-left">
-          <b class="block text-xs truncate max-w-[120px]">${displayName}</b>
-          <span class="mu text-[10px] truncate max-w-[120px] block">${user.email}</span>
+          <b class="block text-[11px] font-bold truncate max-w-[110px]">${displayName}</b>
+          <span class="mu text-[9px] truncate max-w-[110px] block">${user.email}</span>
         </span>
-        <span class="mu">${I('chev', 14)}</span>
+        <span class="mu">${I('chev', 12)}</span>
       </div>
       ${userMenu && html`
         <div class="absolute right-0 mt-2 w-48 cd !p-2 shadow-lg z-50 rounded-2xl flex flex-col gap-1 text-xs">
@@ -476,11 +1177,12 @@ function App() {
    </div></header>
   <h1 class="text-[26px] md:text-[32px] font-semibold tracking-tight">${tab === 'overview' ? `Selamat pagi, ${displayName}` : TABS.find(t => t[0] === tab)[1]}</h1>
   <p class="mu mb-5 mt-1">Pantau tugas, progres, dan status keuangan Anda.</p>
-  ${tab === 'overview' && React.createElement(Overview, P)}${tab === 'transaksi' && html`<${Table} txs=${txs} full=${true} initialPeriod=${txPeriod}/>`}${tab === 'ai' && React.createElement(AI, P)}${tab === 'anggaran' && React.createElement(Budget, P)}${tab === 'target' && React.createElement(Goals, { goals })}${tab === 'laporan' && React.createElement(Report, P)}
+  ${tab === 'overview' && React.createElement(Overview, P)}${tab === 'transaksi' && html`<${Table} txs=${txs} full=${true} initialPeriod=${txPeriod}/>`}${tab === 'ai' && React.createElement(AI, P)}${tab === 'anggaran' && React.createElement(Budget, P)}${tab === 'target' && React.createElement(Goals, { goals, onOpenAdd: () => setGoalModalOpen(true), onAddSavings: P.onAddSavings, onDeleteGoal: P.onDeleteGoal })}${tab === 'laporan' && React.createElement(Report, P)}
  </div></div>
  <nav class="md:hidden fixed bottom-0 inset-x-0 cd !rounded-b-none flex justify-around items-center" style=${{ paddingBottom: 'calc(10px + env(safe-area-inset-bottom,0px))' }}>
   ${[['overview', 'grid', 'Home'], ['transaksi', 'cal', 'Transaksi'], ['+'], ['ai', 'mail', 'AI'], ['anggaran', 'layers', 'Anggaran']].map(([k, i, l]) => k === '+' ? html`<button key=${k} class="ac w-12 h-12 pill -mt-8 shadow-lg flex items-center justify-center" onClick=${() => setModal('manual')}>${I('plus', 22)}</button>` : html`<button key=${k} onClick=${() => setTab(k)} class=${'flex flex-col items-center gap-0.5 text-[10px] ' + (tab === k ? 'font-bold' : 'mu')}>${I(i, 19)}${l}</button>`)}</nav>
- ${modal && html`<${Quick} init=${modal} onClose=${() => setModal(null)} onSave=${save}/>`}
+ ${modal && html`<${Quick} init=${modal} wallets=${activeWalletsList} categories=${categories} onClose=${() => setModal(null)} onSave=${save}/>`}
+ ${goalModalOpen && html`<${AddGoalModal} onClose=${() => setGoalModalOpen(false)} onSave=${handleSaveGoal}/>`}
  ${msg && html`<div class="fixed top-4 left-1/2 -translate-x-1/2 b dk z-50 shadow-lg">${msg}</div>`}</div>`;
 }
 

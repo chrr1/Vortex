@@ -39,7 +39,22 @@ export async function middleware(request: NextRequest) {
     });
 
     // Refresh user session jika ada cookie
-    await supabase.auth.getUser();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    const pathname = request.nextUrl.pathname;
+    const isAuthPage = pathname.startsWith('/login');
+
+    // Jika belum login dan mencoba mengakses rute internal, redirect ke /login
+    if (!user && !isAuthPage) {
+      const loginUrl = new URL('/login', request.url);
+      return NextResponse.redirect(loginUrl);
+    }
+
+    // Jika sudah login dan mencoba mengakses halaman /login, redirect ke / (dashboard)
+    if (user && isAuthPage) {
+      const homeUrl = new URL('/', request.url);
+      return NextResponse.redirect(homeUrl);
+    }
   }
 
   return response;
