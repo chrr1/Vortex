@@ -59,9 +59,9 @@ select option {
 .badge{display:inline-flex;gap:3px;align-items:center;border-radius:6px;padding:2px 6px;font-size:10px;font-weight:600;background:#e4f6ea;color:#1a9a4a}
 .ac .badge{background:rgba(255,255,255,.28);color:#fff}
 .th{background:var(--in);border-radius:10px;color:var(--mu)}
-.row{display:grid;grid-template-columns:24px 1.1fr 1.7fr 1fr 1.1fr 1.5fr 20px;align-items:center;gap:6px;padding:7px 8px;border-bottom:1px solid var(--bd);font-size:12px}
+.row{display:grid;grid-template-columns:22px 0.95fr 1.55fr 0.85fr 0.95fr 0.95fr 1.35fr 22px;align-items:center;gap:6px;padding:7px 8px;border-bottom:1px solid var(--bd);font-size:12px}
 .cb{appearance:none;width:13px;height:13px;border:1.5px solid var(--mu);border-radius:3.5px;padding:0;background:transparent}.cb:checked{background:var(--dk);border-color:var(--dk)}
-@media(max-width:767px){.row{grid-template-columns:1.7fr 1fr}.hm{display:none!important}body{padding-bottom:16px}}
+@media(max-width:767px){.row{grid-template-columns:1.7fr 1fr}.hm{display:none!important}body{padding-bottom:84px}}
 /* Smooth micro-transitions */
 .cd, .in, .bar, .bar i, .b, .ib, .row {
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);

@@ -6,9 +6,9 @@ import * as R from 'recharts';
 import htm from 'htm';
 import { createClient } from '@/lib/supabase/client';
 import { getSessionUser, signOutUser } from '@/lib/supabase/auth';
-import { fetchUserTransactions, insertTransaction } from '@/lib/supabase/transactions';
+import { fetchUserTransactions, insertTransaction, updateTransaction, deleteTransaction } from '@/lib/supabase/transactions';
 import { fetchUserGoals, insertGoal, updateGoalAmount, deleteGoal } from '@/lib/supabase/goals';
-import { fetchUserWallets } from '@/lib/supabase/wallets';
+import { fetchUserWallets, insertWallet, updateWallet, deleteWallet } from '@/lib/supabase/wallets';
 import { fetchUserBudgets, upsertBudget } from '@/lib/supabase/budgets';
 import { fetchCategories, insertCategory } from '@/lib/supabase/categories';
 const html = htm.bind(React.createElement);
@@ -25,6 +25,14 @@ const CAT_ICONS = {
   Lainnya: 'other'
 };
 const CatIcon = (cat, s = 14) => I(CAT_ICONS[cat] || 'other', s);
+const getWalletName = (tx, wallets = []) => {
+  if (tx?.walletName) return tx.walletName;
+  const tw = String(tx?.wallet || '').toLowerCase();
+  const found = (wallets || []).find(w => String(w.id || '').toLowerCase() === tw || String(w.name || w.n || '').toLowerCase() === tw);
+  if (found) return found.name || found.n;
+  if (tx?.wallet && !/^[0-9a-f-]{20,}$/i.test(String(tx.wallet))) return tx.wallet;
+  return 'Cash';
+};
 const WAL = [{ id: 'bca', n: 'BCA', b: 1500000, no: '6782', on: 1 }, { id: 'cash', n: 'Cash', b: 300000, no: '0001', on: 1 }, { id: 'dana', n: 'DANA', b: 250000, no: '4356', on: 1 }, { id: 'gopay', n: 'GoPay', b: 150000, no: '9120', on: 0 }];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu'];
 const TREND = [[2.1, 1.6], [2.8, 1.4], [2.4, 1.2], [2.6, 1.7], [3.1, 1.5], [2.9, 2.1], [2.7, 1.8], [2.5, 1.6]].map((v, i) => ({ m: MON[i], Pengeluaran: v[0], Pemasukan: v[1] }));
@@ -48,14 +56,24 @@ const T0 = [
   { id: 72, type: 'expense', amount: 150000, category: 'Hiburan', description: 'Langganan streaming', wallet: 'gopay', date: '19 Nov, 2026 07:05 PM', m: 'manual' },
   { id: 71, type: 'expense', amount: 420000, category: 'Belanja', description: 'Belanja bulanan', wallet: 'dana', date: '18 Nov, 2026 04:20 PM', m: 'manual' },
   { id: 70, type: 'expense', amount: 210000, category: 'Makanan', description: 'Kopi & makan malam', wallet: 'bca', date: '17 Nov, 2026 08:00 PM', m: 'voice' }];
-function parse(t, m) {
+function parse(t, m, wallets = []) {
   const cat = s => /makan|kopi|minum|jajan|sarapan/i.test(s) ? 'Makanan' : /bensin|ojek|parkir|grab|gojek|tol/i.test(s) ? 'Transportasi' : /nonton|game|film|bioskop/i.test(s) ? 'Hiburan' : /listrik|internet|kos|pulsa|tagihan/i.test(s) ? 'Tagihan' : /belanja|beli/i.test(s) ? 'Belanja' : 'Lainnya';
+  const detectWallet = s => {
+    const lower = s.toLowerCase();
+    const matched = (wallets || []).find(w => {
+      const wn = String(w.name || w.n || '').toLowerCase();
+      return wn && lower.includes(wn);
+    });
+    return matched ? (matched.id || matched.name || matched.n) : (wallets?.[0]?.id || 'cash');
+  };
   return t.split(/,|\bdan\b|\bkemudian\b|\blalu\b|\bserta\b/i).map(s => s.trim()).filter(Boolean).map(s => {
     s = s.replace(/(\d)\.(\d{3})/g, '$1$2'); const x = s.match(/(\d+(?:,\d+)?)\s*(ribu|rb|k|juta|jt)?/i); if (!x) return null;
     let n = parseFloat(x[1].replace(',', '.')), u = (x[2] || '').toLowerCase(); if (['ribu', 'rb', 'k'].includes(u)) n *= 1e3; else if (['juta', 'jt'].includes(u)) n *= 1e6; if (!(n > 0)) return null;
     const inc = /gaji|freelance|dapat uang|terima|bonus|uang masuk/i.test(s);
     const d = s.replace(x[0], '').replace(/\b(hari ini|tadi|saya|uang|rp)\b/gi, '').replace(/\s+/g, ' ').trim() || s;
-    return { id: ++uid, type: inc ? 'income' : 'expense', amount: n, category: inc ? 'Pemasukan' : cat(s), description: d.charAt(0).toUpperCase() + d.slice(1), wallet: 'cash', date: nowS(), m };
+    const wId = detectWallet(s);
+    const wObj = (wallets || []).find(w => (w.id || w.name || w.n) === wId);
+    return { id: ++uid, type: inc ? 'income' : 'expense', amount: n, category: inc ? 'Pemasukan' : cat(s), description: d.charAt(0).toUpperCase() + d.slice(1), wallet: wId, walletName: wObj ? (wObj.name || wObj.n) : 'Cash', date: nowS(), m };
   }).filter(Boolean);
 }
 const Dots = () => html`<span class="mu">${I('dots', 16)}</span>`;
@@ -63,15 +81,75 @@ const Stat = ({ l, v, ic, ac, bd, sub = 'bulan ini', smallVal = false }) => html
  <div class="flex justify-between items-start"><span class=${'text-[13px] font-medium ' + (ac ? '' : 'mu')}>${l}</span><span class="w-7 h-7 rounded-full flex items-center justify-center" style=${{ background: ac ? 'rgba(255,255,255,.25)' : 'var(--cd)' }}>${I(ic, 14)}</span></div>
  <div class=${(smallVal ? 'text-[18px] md:text-[20px]' : 'text-[22px] md:text-[24px]') + ' font-bold tracking-tight mt-2 truncate'}>${v}</div><div class="flex items-center gap-1.5"><span class="badge">${bd}</span><span class=${'text-[10px] ' + (ac ? 'opacity-90' : 'mu')}>${sub}</span></div></div>`;
 const Hatch = () => html`<defs><pattern id="h" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="7" fill="#fbd9c9"/><rect width="3.5" height="7" fill="#f26a2e"/></pattern></defs>`;
-const Row = ({ t, sel, tg }) => html`<div class="row" style=${{ background: sel ? 'var(--in)' : 'transparent' }}>
- <input type="checkbox" class="cb hm" checked=${!!sel} onChange=${tg}/>
- <span class="hm mu font-normal text-[10.5px]">TRX_${String(t.id).padStart(6, '0')}</span>
- <span class="flex items-center gap-2 min-w-0"><span class="w-5 h-5 rounded-md in flex items-center justify-center mu shrink-0">${CatIcon(t.category, 12)}</span><span class="truncate"><span class="block truncate font-medium text-xs">${t.description}</span><span class="md:hidden mu text-[10px] font-normal">${t.date}</span></span></span>
- <span class="font-bold text-right md:text-left text-xs md:text-[12.5px]" style=${{ color: t.type === 'income' ? '#1a9a4a' : 'inherit' }}>${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</span>
- <span class="hm flex items-center gap-1.5 font-normal text-[10.5px]"><i class="w-1.5 h-1.5 rounded-full" style=${{ background: MC[t.m][0] }}></i>${MC[t.m][1]}</span>
- <span class="hm mu font-normal text-[10.5px] leading-tight">${t.date}</span><span class="hm mu opacity-70 hover:opacity-100 cursor-pointer"><${Dots}/></span></div>`;
-function Table({ txs, limit, full, initialPeriod = 'all', onViewAll }) {
-  const [q, setQ] = useState(''), [f, setF] = useState('all'), [sel, setSel] = useState([73]), [period, setPeriod] = useState(initialPeriod);
+const Row = ({ t, sel, tg, wallets = [], onEdit, onDelete }) => {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const menuRef = React.useRef(null);
+  const wName = getWalletName(t, wallets);
+
+  useEffect(() => {
+    const close = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+        setConfirmDel(false);
+      }
+    };
+    if (menuOpen) document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [menuOpen]);
+
+  return html`<div class="row relative" style=${{ background: sel ? 'var(--in)' : 'transparent' }}>
+   <input type="checkbox" class="cb hm" checked=${!!sel} onChange=${tg}/>
+   <span class="hm mu font-normal text-[10.5px]">TRX_${String(t.id).padStart(6, '0')}</span>
+   <span class="flex items-center gap-2 min-w-0">
+     <span class="w-5 h-5 rounded-md in flex items-center justify-center mu shrink-0">${CatIcon(t.category, 12)}</span>
+     <span class="truncate min-w-0">
+       <span class="block truncate font-medium text-xs">${t.description}</span>
+       <span class="md:hidden mu text-[10px] font-normal flex items-center gap-1 truncate">
+         <span class="inline-flex items-center gap-1 px-1.5 py-[1px] rounded in font-semibold text-[9.5px] text-[var(--tx)] shrink-0">
+           <i class="w-1.5 h-1.5 rounded-full bg-[#f26a2e] inline-block"></i>${wName}
+         </span>
+         <span class="truncate">${t.date}</span>
+       </span>
+     </span>
+   </span>
+   <span class="hm min-w-0">
+     <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full in text-[10.5px] font-semibold truncate max-w-full">
+       <i class="w-1.5 h-1.5 rounded-full bg-[#f26a2e] shrink-0"></i>
+       <span class="truncate">${wName}</span>
+     </span>
+   </span>
+   <span class="font-bold text-right md:text-left text-xs md:text-[12.5px] truncate" style=${{ color: t.type === 'income' ? '#1a9a4a' : 'inherit' }}>${t.type === 'income' ? '+' : '-'}${fmt(t.amount)}</span>
+   <span class="hm flex items-center gap-1.5 font-normal text-[10.5px]"><i class="w-1.5 h-1.5 rounded-full" style=${{ background: MC[t.m]?.[0] || '#2f80ed' }}></i>${MC[t.m]?.[1] || 'Manual'}</span>
+   <span class="hm mu font-normal text-[10.5px] leading-tight">${t.date}</span>
+   <div class="hm relative flex justify-end" ref=${menuRef}>
+     <button type="button" class="mu opacity-70 hover:opacity-100 cursor-pointer p-0.5" onClick=${() => { setMenuOpen(!menuOpen); setConfirmDel(false); }} title="Aksi transaksi">
+       <${Dots}/>
+     </button>
+     ${menuOpen && html`
+       <div class="absolute right-0 top-full mt-1 w-32 cd !p-1 shadow-xl rounded-xl border border-[var(--bd)] z-40 flex flex-col gap-0.5 text-[11px]">
+         ${onEdit && html`
+           <button type="button" class="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[var(--in)] font-medium" onClick=${() => { setMenuOpen(false); onEdit(t); }}>
+             Edit
+           </button>
+         `}
+         ${onDelete && html`
+           <button type="button" class=${`w-full text-left px-2.5 py-1.5 rounded-lg font-medium ${confirmDel ? 'bg-red-500 text-white' : 'text-red-500 hover:bg-red-500/10'}`} onClick=${() => {
+             if (!confirmDel) { setConfirmDel(true); return; }
+             setMenuOpen(false);
+             onDelete(t.id);
+           }}>
+             ${confirmDel ? 'Yakin Hapus?' : 'Hapus'}
+           </button>
+         `}
+       </div>
+     `}
+   </div>
+  </div>`;
+};
+
+function Table({ txs, limit, full, initialPeriod = 'all', onViewAll, wallets = [], onEditTx, onDeleteTx, onBulkDeleteTx, onOpenQuick }) {
+  const [q, setQ] = useState(''), [f, setF] = useState('all'), [walletFilter, setWalletFilter] = useState('all'), [sel, setSel] = useState([]), [period, setPeriod] = useState(initialPeriod), [confirmBulk, setConfirmBulk] = useState(false);
   React.useEffect(() => { if (initialPeriod) setPeriod(initialPeriod); }, [initialPeriod]);
   const now = new Date();
   const byPeriod = txs.filter(t => {
@@ -83,7 +161,19 @@ function Table({ txs, limit, full, initialPeriod = 'all', onViewAll }) {
   });
   const subInc = byPeriod.filter(t => t.type === 'income').reduce((a, t) => a + t.amount, 0);
   const subExp = byPeriod.filter(t => t.type === 'expense').reduce((a, t) => a + t.amount, 0);
-  const L = byPeriod.filter(t => (f === 'all' || t.type === f) && (t.description + t.category).toLowerCase().includes(q.toLowerCase())).slice(0, limit || 99);
+  const L = byPeriod.filter(t => {
+    const wName = getWalletName(t, wallets);
+    const matchType = f === 'all' || t.type === f;
+    const matchWallet = walletFilter === 'all' || wName.toLowerCase() === walletFilter.toLowerCase() || String(t.wallet || '').toLowerCase() === walletFilter.toLowerCase();
+    const matchQ = (t.description + ' ' + t.category + ' ' + wName).toLowerCase().includes(q.toLowerCase());
+    return matchType && matchWallet && matchQ;
+  }).slice(0, limit || 99);
+
+  const walletCycle = ['all', ...(wallets || []).map(w => w.name || w.n)];
+  const cycleWallet = () => {
+    const idx = walletCycle.findIndex(w => w.toLowerCase() === walletFilter.toLowerCase());
+    setWalletFilter(walletCycle[(idx + 1) % walletCycle.length] || 'all');
+  };
 
   return html`<div class="cd h-full">
   <div class="flex flex-wrap items-center justify-between gap-2 mb-2.5">
@@ -93,17 +183,35 @@ function Table({ txs, limit, full, initialPeriod = 'all', onViewAll }) {
    </div>
    <div class="flex flex-wrap items-center gap-1.5">
     <div class="flex items-center gap-1.5 px-2.5 py-1 in pill text-xs"><span class="mu">${I('search', 13)}</span><input class="!bg-transparent !border-0 !p-0 !w-20 md:!w-28 text-xs" placeholder="Cari" value=${q} onChange=${e => setQ(e.target.value)}/></div>
-    <button class="b !py-1 !px-2.5 !text-xs flex items-center gap-1" style=${{ border: '1px solid var(--bd)', background: 'var(--cd)' }} onClick=${() => setF(f === 'all' ? 'income' : f === 'income' ? 'expense' : 'all')}>${f === 'all' ? 'Semua' : f === 'income' ? 'Pemasukan' : 'Pengeluaran'} ${I('filt', 12)}</button>
+    ${walletCycle.length > 1 && html`
+      <button type="button" class="b !py-1 !px-2.5 !text-xs flex items-center gap-1" style=${{ border: '1px solid var(--bd)', background: walletFilter === 'all' ? 'var(--cd)' : 'var(--in)' }} onClick=${cycleWallet} title="Filter dompet">
+        <i class="w-1.5 h-1.5 rounded-full bg-[#f26a2e] inline-block"></i>
+        ${walletFilter === 'all' ? 'Semua Dompet' : walletFilter}
+      </button>
+    `}
+    <button type="button" class="b !py-1 !px-2.5 !text-xs flex items-center gap-1" style=${{ border: '1px solid var(--bd)', background: 'var(--cd)' }} onClick=${() => setF(f === 'all' ? 'income' : f === 'income' ? 'expense' : 'all')}>${f === 'all' ? 'Semua' : f === 'income' ? 'Pemasukan' : 'Pengeluaran'} ${I('filt', 12)}</button>
    </div>
   </div>
 
   <div class="flex items-center justify-between gap-2 mb-2.5 overflow-x-auto pb-0.5">
-   <div class="flex items-center gap-1 p-0.5 in pill text-[10.5px]">
+   <div class="flex items-center gap-1 p-0.5 in pill text-[10.5px] shrink-0">
     ${[['all', 'Semua'], ['today', 'Hari Ini'], ['week', 'Minggu Ini'], ['month', 'Bulan Ini']].map(([k, l]) => html`
      <button key=${k} onClick=${() => setPeriod(k)} class=${'px-2.5 py-0.5 pill font-semibold transition-colors ' + (period === k ? 'dk' : 'mu hover:text-[var(--tx)]')}>${l}</button>
     `)}
    </div>
-   ${!full && onViewAll && html`<button class="text-[11px] mu font-semibold hover:underline flex items-center gap-1" onClick=${onViewAll}>Lihat Semua ${I('arrow-right', 11)}</button>`}
+   <div class="flex items-center gap-2 shrink-0">
+    ${sel.length > 0 && onBulkDeleteTx && html`
+      <button type="button" class=${`px-2.5 py-1 rounded-full text-[10.5px] font-semibold transition ${confirmBulk ? 'bg-red-500 text-white' : 'bg-red-500/10 text-red-500'}`} onClick=${() => {
+        if (!confirmBulk) { setConfirmBulk(true); setTimeout(() => setConfirmBulk(false), 3000); return; }
+        onBulkDeleteTx(sel);
+        setSel([]);
+        setConfirmBulk(false);
+      }}>
+        ${confirmBulk ? `Yakin Hapus ${sel.length}?` : `Hapus ${sel.length} dipilih`}
+      </button>
+    `}
+    ${!full && onViewAll && html`<button class="text-[11px] mu font-semibold hover:underline flex items-center gap-1" onClick=${onViewAll}>Lihat Semua ${I('arrow-right', 11)}</button>`}
+   </div>
   </div>
 
   ${(period !== 'all' || full) && html`
@@ -121,10 +229,15 @@ function Table({ txs, limit, full, initialPeriod = 'all', onViewAll }) {
    </div>
   `}
 
-  <div class="rounded-[14px] overflow-hidden" style=${{ border: '1px solid var(--bd)' }}>
-   <div class="row th hm !border-0 !py-1 text-[10.5px] font-semibold" style=${{ color: 'var(--mu)' }}><span></span><span>ID Transaksi</span><span>Aktivitas</span><span>Nominal</span><span>Metode</span><span>Tanggal & Jam</span><span></span></div>
-   ${L.map(t => html`<${Row} key=${t.id} t=${t} sel=${sel.includes(t.id)} tg=${() => setSel(sel.includes(t.id) ? sel.filter(x => x !== t.id) : [...sel, t.id])}/>`)}
-   ${!L.length && html`<div class="mu text-center py-6 text-xs">Tidak ada transaksi untuk filter ini.</div>`}
+  <div class="rounded-[14px] overflow-visible" style=${{ border: '1px solid var(--bd)' }}>
+   <div class="row th hm !border-0 !py-1.5 text-[10.5px] font-semibold !rounded-b-none" style=${{ color: 'var(--mu)' }}><span></span><span>ID Transaksi</span><span>Aktivitas</span><span>Dompet</span><span>Nominal</span><span>Metode</span><span>Tanggal & Jam</span><span></span></div>
+   ${L.map(t => html`<${Row} key=${t.id} t=${t} wallets=${wallets} sel=${sel.includes(t.id)} tg=${() => setSel(sel.includes(t.id) ? sel.filter(x => x !== t.id) : [...sel, t.id])} onEdit=${onEditTx} onDelete=${onDeleteTx}/>`)}
+   ${!L.length && html`
+     <div class="mu text-center py-6 text-xs flex flex-col items-center gap-2">
+       <span>Tidak ada transaksi untuk filter ini.</span>
+       ${onOpenQuick && txs.length === 0 && html`<button type="button" class="b ac !py-1.5 !px-3 text-[11px]" onClick=${() => onOpenQuick('manual')}>+ Catat Transaksi Pertama</button>`}
+     </div>
+   `}
   </div>
  </div>`;
 }
@@ -198,21 +311,23 @@ function CustomSelect({ value, options, onChange, iconRenderer, placeholder = 'P
   `;
 }
 
-function Quick({ init, onClose, onSave, wallets = [], categories = [] }) {
-  const isDirectType = init === 'income' || init === 'expense';
+function Quick({ init, editTx = null, onClose, onSave, wallets = [], categories = [] }) {
+  const isEdit = !!editTx;
+  const isDirectType = isEdit || init === 'income' || init === 'expense';
   const availableWallets = wallets && wallets.length > 0 ? wallets : WAL;
   const defaultWalletId = availableWallets[0]?.id || availableWallets[0]?.name || 'cash';
   const [tab, setTab] = useState(isDirectType ? 'manual' : init);
   const [txt, setTxt] = useState('');
   const [res, setRes] = useState([]);
   const [rec, setRec] = useState(false);
+  const [errMsg, setErrMsg] = useState('');
 
   const [f, setF] = useState({
-    type: init === 'income' ? 'income' : 'expense',
-    amount: '',
-    category: init === 'income' ? 'Pemasukan' : 'Makanan',
-    description: '',
-    wallet: defaultWalletId
+    type: editTx ? editTx.type : (init === 'income' ? 'income' : 'expense'),
+    amount: editTx ? String(editTx.amount) : '',
+    category: editTx ? editTx.category : (init === 'income' ? 'Pemasukan' : 'Makanan'),
+    description: editTx ? editTx.description : '',
+    wallet: editTx ? (editTx.wallet || defaultWalletId) : defaultWalletId
   });
 
   const availableCategories = (categories && categories.length > 0)
@@ -222,13 +337,15 @@ function Quick({ init, onClose, onSave, wallets = [], categories = [] }) {
   const quickAmounts = [20000, 50000, 100000, 250000, 500000];
 
   const handleQuickAdd = (amt) => {
+    setErrMsg('');
     const cur = Number(f.amount || 0);
     setF({ ...f, amount: String(cur + amt) });
   };
 
   const SR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
   const mic = () => {
-    if (!SR) return alert('Browser tidak mendukung speech recognition. Gunakan input teks.');
+    setErrMsg('');
+    if (!SR) return setErrMsg('Browser tidak mendukung speech recognition. Gunakan input teks.');
     const r = new SR();
     r.lang = 'id-ID';
     r.onresult = e => setTxt(e.results[0][0].transcript);
@@ -240,15 +357,29 @@ function Quick({ init, onClose, onSave, wallets = [], categories = [] }) {
 
   const save = () => {
     const a = Number(f.amount);
-    if (!a || a <= 0) return alert('Masukkan nominal transaksi yang valid.');
+    if (!a || a <= 0) return setErrMsg('Masukkan nominal transaksi yang lebih dari Rp0.');
+    setErrMsg('');
+    const wObj = availableWallets.find(w => (w.id || w.name || w.n) === f.wallet || (w.name || w.n) === f.wallet);
+    const wName = wObj ? (wObj.name || wObj.n) : getWalletName({ wallet: f.wallet }, availableWallets);
+    if (isEdit) {
+      onSave({
+        ...editTx,
+        ...f,
+        amount: a,
+        walletName: wName,
+        description: f.description.trim() || (f.type === 'income' ? 'Pemasukan' : f.category),
+      }, true);
+      return;
+    }
     onSave([{
       ...f,
       id: ++uid,
       amount: a,
+      walletName: wName,
       description: f.description.trim() || (f.type === 'income' ? 'Pemasukan' : f.category),
       date: nowS(),
       m: 'manual'
-    }]);
+    }], false);
   };
 
   return html`
@@ -257,7 +388,7 @@ function Quick({ init, onClose, onSave, wallets = [], categories = [] }) {
         <div class="flex justify-between items-center mb-3">
           <div class="flex items-center gap-2">
             <span class="w-2.5 h-2.5 rounded-full bg-[#f26a2e]"></span>
-            <b class="text-sm sm:text-base font-bold">Quick Input</b>
+            <b class="text-sm sm:text-base font-bold">${isEdit ? 'Edit Transaksi' : 'Quick Input'}</b>
           </div>
           <button class="ib !w-7 !h-7 mu hover:opacity-80" onClick=${onClose}>
             ${I('close', 14)}
@@ -381,12 +512,13 @@ function Quick({ init, onClose, onSave, wallets = [], categories = [] }) {
             </div>
 
             <!-- Tombol Simpan -->
+            ${errMsg && html`<div class="text-[11px] text-red-500 font-medium mb-2 text-center">${errMsg}</div>`}
             <button
               type="button"
               onClick=${save}
               class="b ac w-full !py-2.5 text-xs font-bold rounded-xl shadow-md hover:opacity-95 transition flex items-center justify-center gap-1.5"
             >
-              Simpan Transaksi
+              ${isEdit ? 'Simpan Perubahan' : 'Simpan Transaksi'}
             </button>
           </div>
         ` : html`
@@ -413,11 +545,17 @@ function Quick({ init, onClose, onSave, wallets = [], categories = [] }) {
               <button
                 type="button"
                 class="b dk flex-1 text-xs"
-                onClick=${() => setRes(parse(txt, tab === 'ai' ? 'ai_chat' : 'voice'))}
+                onClick=${() => {
+                  const parsed = parse(txt, tab === 'ai' ? 'ai_chat' : 'voice', availableWallets);
+                  if (!parsed.length) setErrMsg('Tidak ada nominal terdeteksi. Contoh: "makan 25rb pakai dana"');
+                  else setErrMsg('');
+                  setRes(parsed);
+                }}
               >
                 Ekstrak Transaksi
               </button>
             </div>
+            ${errMsg && html`<div class="text-[11px] text-red-500 font-medium mb-2">${errMsg}</div>`}
 
             ${res.length > 0 && html`
               <div class="mt-3">
@@ -480,7 +618,7 @@ const DEFAULT_GOALS = [
   { id: 'g2', name: 'Laptop Baru', target_amount: 12000000, current_amount: 4800000, icon: 'laptop' }
 ];
 
-function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals = [], wallets = [], budgets = [], onOpenAddGoal }) {
+function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals = [], wallets = [], budgets = [], onOpenAddGoal, onOpenWalletModal, onEditTx, onDeleteTx, onBulkDeleteTx }) {
   const [statPeriod, setStatPeriod] = useState('today');
   const now = new Date();
   const todayTxs = txs.filter(t => isSameDay(parseTxDate(t.date), now));
@@ -573,8 +711,15 @@ function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals 
     </div>
 
     <div class="in p-2.5 mt-4">
-     <div class="flex gap-2 text-[11px] mb-2"><b>Dompet</b><span class="mu">| Total ${activeWallets.length} dompet</span></div>
-     <div class="grid grid-cols-3 gap-2">${activeWallets.slice(0, 3).map(w => html`<div key=${w.id} class="cd !p-2 !rounded-[10px]"><div class="flex justify-between items-center text-[10px] font-semibold"><span class="flex items-center gap-1"><i class="w-3.5 h-3.5 rounded-full ac inline-block"></i>${w.n}</span><${Dots}/></div><div class="font-bold text-[12px] mt-2 truncate">${fmt(bal(w))}</div><div class="text-[9px] mu mt-1 truncate">Saldo awal ${fmt(w.b)}</div><div class="text-[9px] mt-1" style=${{ color: w.on ? '#1a9a4a' : '#d93025' }}>${w.on ? 'Aktif' : 'Nonaktif'}</div></div>`)}</div>
+     <div class="flex items-center justify-between text-[11px] mb-2">
+       <div class="flex gap-2"><b>Dompet</b><span class="mu">| Total ${activeWallets.length} dompet</span></div>
+       ${onOpenWalletModal && html`<button type="button" class="text-[10.5px] font-semibold text-[#f26a2e] hover:underline flex items-center gap-0.5 cursor-pointer" onClick=${() => onOpenWalletModal(null)}>${I('plus', 11)} Dompet</button>`}
+     </div>
+     ${activeWallets.length === 0 ? html`
+       <div class="text-center py-3 text-[11px] mu">Belum ada dompet. Klik <b>+ Dompet</b> untuk menambahkan.</div>
+     ` : html`
+       <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">${activeWallets.map(w => html`<div key=${w.id} class="cd !p-2 !rounded-[10px]"><div class="flex justify-between items-center text-[10px] font-semibold"><span class="flex items-center gap-1 truncate"><i class="w-3 h-3 rounded-full ac inline-block shrink-0"></i><span class="truncate">${w.n}</span></span>${onOpenWalletModal ? html`<button type="button" class="mu hover:text-[var(--tx)] p-0.5 cursor-pointer" onClick=${() => onOpenWalletModal(w)} title="Kelola dompet"><${Dots}/></button>` : html`<${Dots}/>`}</div><div class="font-bold text-[12px] mt-2 truncate">${fmt(bal(w))}</div><div class="text-[9px] mu mt-1 truncate">Saldo awal ${fmt(w.b)}</div><div class="text-[9px] mt-1" style=${{ color: w.on ? '#1a9a4a' : '#d93025' }}>${w.on ? 'Aktif' : 'Nonaktif'}</div></div>`)}</div>
+     `}
     </div>
    </div>
 
@@ -669,7 +814,7 @@ function Overview({ txs, tot, inc, exp, spent, open, go, goPeriod, toast, goals 
      </button>
     </div>
    </div>
-   <div class="lg:col-span-2"><${Table} txs=${txs} limit=${5} onViewAll=${() => go('transaksi')}/></div>
+   <div class="lg:col-span-2"><${Table} txs=${txs} wallets=${wallets} limit=${5} onViewAll=${() => go('transaksi')} onEditTx=${onEditTx} onDeleteTx=${onDeleteTx} onBulkDeleteTx=${onBulkDeleteTx} onOpenQuick=${open}/></div>
   </div>`;
 }
 function AI({ txs, tot, inc, exp, spent, open }) {
@@ -868,10 +1013,12 @@ function Goals({ goals = [], onOpenAdd, onAddSavings, onDeleteGoal }) {
 
 function AddGoalModal({ onClose, onSave }) {
   const [f, setF] = useState({ name: '', target_amount: '', current_amount: '', target_date: '' });
+  const [errMsg, setErrMsg] = useState('');
   const handleSubmit = () => {
     const target = Number(f.target_amount);
-    if (!f.name.trim()) return alert('Nama target harus diisi');
-    if (!target || target <= 0) return alert('Nominal target harus lebih dari 0');
+    if (!f.name.trim()) return setErrMsg('Nama target harus diisi.');
+    if (!target || target <= 0) return setErrMsg('Nominal target harus lebih dari Rp0.');
+    setErrMsg('');
     onSave({
       name: f.name.trim(),
       target_amount: target,
@@ -880,8 +1027,8 @@ function AddGoalModal({ onClose, onSave }) {
     });
   };
 
-  return html`<div class="fixed inset-0 z-50 flex items-end md:items-center justify-center" style=${{ background: 'rgba(0,0,0,.45)' }} onClick=${onClose}>
-    <div class="cd w-full md:max-w-md max-h-[90vh] overflow-auto !rounded-b-none md:!rounded-b-[18px]" onClick=${e => e.stopPropagation()}>
+  return html`<div class="fixed inset-0 z-50 flex items-end md:items-center justify-center p-0 sm:p-4" style=${{ background: 'rgba(0,0,0,.45)', backdropFilter: 'blur(2px)' }} onClick=${onClose}>
+    <div class="cd w-full md:max-w-md max-h-[90vh] overflow-auto !rounded-b-none md:!rounded-3xl" onClick=${e => e.stopPropagation()}>
       <div class="flex justify-between items-center mb-4">
         <b class="text-base flex items-center gap-2">${I('target-icon', 16)} Tambah Target Tabungan</b>
         <button class="mu hover:opacity-80 p-1" onClick=${onClose}>${I('close', 16)}</button>
@@ -905,9 +1052,67 @@ function AddGoalModal({ onClose, onSave }) {
           <label class="block mb-1 font-semibold mu">Target Selesai (Opsional)</label>
           <input type="date" class="w-full" value=${f.target_date} onChange=${e => setF({ ...f, target_date: e.target.value })}/>
         </div>
+        ${errMsg && html`<div class="text-[11px] text-red-500 font-medium">${errMsg}</div>`}
         <div class="flex gap-2 mt-3 pt-2 border-t border-[var(--bd)]">
           <button class="b flex-1" onClick=${onClose}>Batal</button>
           <button class="b dk flex-1 font-semibold" onClick=${handleSubmit}>Simpan Target</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function WalletModal({ wallet, onClose, onSave, onDelete }) {
+  const isEdit = !!wallet;
+  const [name, setName] = useState(wallet ? (wallet.n || wallet.name || '') : '');
+  const [balance, setBalance] = useState(wallet ? String(wallet.b ?? wallet.initial_balance ?? 0) : '0');
+  const [isActive, setIsActive] = useState(wallet ? (wallet.on !== undefined ? !!wallet.on : !!wallet.is_active) : true);
+  const [errMsg, setErrMsg] = useState('');
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  const handleSubmit = () => {
+    if (!name.trim()) return setErrMsg('Nama dompet harus diisi.');
+    const numBal = Number(balance || 0);
+    if (isNaN(numBal) || numBal < 0) return setErrMsg('Saldo awal tidak boleh negatif.');
+    setErrMsg('');
+    onSave({ name: name.trim(), initial_balance: numBal, is_active: isActive }, wallet?.id);
+  };
+
+  return html`<div class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" style=${{ background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(3px)' }} onClick=${onClose}>
+    <div class="cd w-full sm:max-w-[380px] !rounded-b-none sm:!rounded-3xl p-4 sm:p-5 shadow-2xl" onClick=${e => e.stopPropagation()}>
+      <div class="flex justify-between items-center mb-3">
+        <b class="text-sm sm:text-base font-bold flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-[#f26a2e]"></span>${isEdit ? 'Kelola Dompet' : 'Tambah Dompet Baru'}</b>
+        <button class="ib !w-7 !h-7 mu hover:opacity-80" onClick=${onClose}>${I('close', 14)}</button>
+      </div>
+      <div class="flex flex-col gap-3 text-xs">
+        <div>
+          <label class="block mb-1 font-semibold mu">Nama Dompet / Rekening</label>
+          <input placeholder="Contoh: Cash, BRI, DANA, GoPay" value=${name} onChange=${e => setName(e.target.value)} autoFocus/>
+        </div>
+        <div>
+          <label class="block mb-1 font-semibold mu">Saldo Awal (Rp)</label>
+          <input type="number" placeholder="0" value=${balance} onChange=${e => setBalance(e.target.value)}/>
+        </div>
+        ${isEdit && html`
+          <div class="flex items-center justify-between in p-2.5 rounded-xl">
+            <span class="font-semibold">Status Dompet</span>
+            <button type="button" onClick=${() => setIsActive(!isActive)} class=${`px-3 py-1 rounded-full text-[11px] font-bold transition ${isActive ? 'bg-[#e7f7ee] text-[#169d53]' : 'bg-red-500/10 text-red-500'}`}>
+              ${isActive ? 'Aktif' : 'Nonaktif'}
+            </button>
+          </div>
+        `}
+        ${errMsg && html`<div class="text-[11px] text-red-500 font-medium">${errMsg}</div>`}
+        <div class="flex gap-2 mt-2 pt-2 border-t border-[var(--bd)]">
+          ${isEdit && onDelete && html`
+            <button type="button" class=${`b !px-3 ${confirmDel ? '!bg-red-500 !text-white' : 'text-red-500'}`} onClick=${() => {
+              if (!confirmDel) { setConfirmDel(true); return; }
+              onDelete(wallet.id);
+            }}>
+              ${confirmDel ? 'Yakin Hapus?' : I('trash', 14)}
+            </button>
+          `}
+          <button type="button" class="b flex-1" onClick=${onClose}>Batal</button>
+          <button type="button" class="b ac flex-1 font-bold" onClick=${handleSubmit}>Simpan</button>
         </div>
       </div>
     </div>
@@ -917,7 +1122,7 @@ const Report = ({ toast }) => html`<div class="cd"><b>Laporan Keuangan</b><p cla
 const TABS = [['overview', 'Overview'], ['transaksi', 'Transaksi'], ['ai', 'AI Assistant'], ['anggaran', 'Anggaran'], ['target', 'Target'], ['laporan', 'Laporan']];
 const RAIL = [['grid', 'overview'], ['cal', 'transaksi'], ['mail', 'ai'], ['doc', 'laporan'], ['users', 'target'], ['layers', 'anggaran'], ['cog', 'overview']];
 function App() {
-  const [tab, setTab] = useState('overview'), [txPeriod, setTxPeriod] = useState('all'), [txs, setTxs] = useState([]), [goals, setGoals] = useState([]), [wallets, setWallets] = useState([]), [budgets, setBudgets] = useState([]), [categories, setCategories] = useState([]), [modal, setModal] = useState(null), [goalModalOpen, setGoalModalOpen] = useState(false), [msg, setMsg] = useState(''), [dark, setDark] = useState(false);
+  const [tab, setTab] = useState('overview'), [txPeriod, setTxPeriod] = useState('all'), [txs, setTxs] = useState([]), [goals, setGoals] = useState([]), [wallets, setWallets] = useState([]), [budgets, setBudgets] = useState([]), [categories, setCategories] = useState([]), [modal, setModal] = useState(null), [editTx, setEditTx] = useState(null), [walletModal, setWalletModal] = useState(null), [goalModalOpen, setGoalModalOpen] = useState(false), [msg, setMsg] = useState(''), [dark, setDark] = useState(false);
   const [user, setUser] = useState(null), [userMenu, setUserMenu] = useState(false), [loadingAuth, setLoadingAuth] = useState(true), [loadingData, setLoadingData] = useState(false);
   const toast = m => { setMsg(m); setTimeout(() => setMsg(''), 2400) };
 
@@ -993,8 +1198,28 @@ function App() {
   const activeWalletsList = wallets.length > 0 ? wallets : (user ? [] : WAL);
   const tot = activeWalletsList.reduce((a, w) => a + (w.initial_balance || w.b || 0), 0) + inc - exp;
 
-  // Optimistic UI updates untuk transaksi
-  const save = async l => {
+  // Optimistic UI updates untuk transaksi (tambah & edit)
+  const save = async (l, isEdit = false) => {
+    if (isEdit && l && !Array.isArray(l)) {
+      const prevTxs = [...txs];
+      setTxs(prev => prev.map(item => item.id === l.id ? l : item));
+      setEditTx(null);
+      toast('Transaksi diperbarui');
+      if (user) {
+        try {
+          const updated = await updateTransaction(l.id, l);
+          if (updated) {
+            setTxs(prev => prev.map(item => item.id === l.id ? { ...item, wallet: updated.wallet_id || l.wallet, walletName: updated.wallets?.name || l.walletName } : item));
+          }
+        } catch (e) {
+          console.error('Failed to update transaction:', e);
+          setTxs(prevTxs);
+          toast('Gagal memperbarui transaksi di cloud');
+        }
+      }
+      return;
+    }
+
     setTxs([...l, ...txs]);
     setModal(null);
     toast(l.length + ' transaksi disimpan');
@@ -1003,12 +1228,106 @@ function App() {
         try {
           const inserted = await insertTransaction(t);
           if (inserted && inserted.id) {
-            setTxs(prev => prev.map(item => item.id === t.id ? { ...item, id: inserted.id } : item));
+            setTxs(prev => prev.map(item => item.id === t.id ? {
+              ...item,
+              id: inserted.id,
+              wallet: inserted.wallet_id || item.wallet,
+              walletName: inserted.wallets?.name || item.walletName
+            } : item));
           }
         } catch (e) {
           console.error('Failed to sync to Supabase:', e);
           toast('Gagal sinkronisasi transaksi ke cloud');
         }
+      }
+    }
+  };
+
+  const handleDeleteTx = async (txId) => {
+    const prevTxs = [...txs];
+    setTxs(prev => prev.filter(t => t.id !== txId));
+    toast('Transaksi dihapus');
+    if (user) {
+      try {
+        await deleteTransaction(txId);
+      } catch (e) {
+        console.error('Failed to delete transaction:', e);
+        setTxs(prevTxs);
+        toast('Gagal menghapus transaksi');
+      }
+    }
+  };
+
+  const handleBulkDeleteTx = async (ids) => {
+    const prevTxs = [...txs];
+    setTxs(prev => prev.filter(t => !ids.includes(t.id)));
+    toast(ids.length + ' transaksi dihapus');
+    if (user) {
+      try {
+        await Promise.all(ids.map(id => deleteTransaction(id)));
+      } catch (e) {
+        console.error('Failed to bulk delete transactions:', e);
+        setTxs(prevTxs);
+        toast('Sebagian transaksi gagal dihapus');
+      }
+    }
+  };
+
+  const handleSaveWallet = async (data, existingId) => {
+    if (existingId) {
+      const prevWallets = [...wallets];
+      setWallets(prev => prev.map(w => w.id === existingId ? { ...w, ...data } : w));
+      setWalletModal(null);
+      toast('Dompet diperbarui');
+      if (user) {
+        try {
+          await updateWallet(existingId, data);
+        } catch (e) {
+          console.error('Failed to update wallet:', e);
+          setWallets(prevWallets);
+          toast('Gagal memperbarui dompet');
+        }
+      }
+      return;
+    }
+
+    try {
+      if (user) {
+        const created = await insertWallet(data.name, data.initial_balance);
+        if (created) {
+          setWallets(prev => [...prev, {
+            id: created.id,
+            user_id: created.user_id,
+            name: created.name,
+            account_number: created.account_number || '',
+            initial_balance: Number(created.initial_balance || 0),
+            currency: created.currency || 'IDR',
+            is_active: created.is_active ?? true,
+          }]);
+        }
+      } else {
+        setWallets(prev => [...prev, { id: 'w_' + Date.now(), name: data.name, initial_balance: data.initial_balance, is_active: true }]);
+      }
+      setWalletModal(null);
+      toast('Dompet baru ditambahkan');
+    } catch (e) {
+      console.error('Failed to insert wallet:', e);
+      toast('Gagal menambah dompet');
+    }
+  };
+
+  const handleDeleteWallet = async (walletId) => {
+    const prevWallets = [...wallets];
+    setWallets(prev => prev.filter(w => w.id !== walletId));
+    setWalletModal(null);
+    toast('Dompet dihapus');
+    if (user) {
+      try {
+        await deleteWallet(walletId);
+      } catch (e) {
+        console.error('Failed to delete wallet:', e);
+        setWallets(prevWallets);
+        toast('Gagal menghapus dompet');
       }
     }
   };
@@ -1100,7 +1419,12 @@ function App() {
     }
   };
 
-  const theme = d => { setDark(d); document.documentElement.dataset.theme = d ? 'dark' : 'light' };
+  const theme = d => {
+    setDark(d);
+    document.documentElement.dataset.theme = d ? 'dark' : 'light';
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', d ? '#0b0b0c' : '#e6e6e6');
+  };
   const goPeriod = p => { setTxPeriod(p); setTab('transaksi'); };
   const P = { 
     txs, 
@@ -1116,6 +1440,10 @@ function App() {
     goPeriod, 
     toast,
     onOpenAddGoal: () => setGoalModalOpen(true),
+    onOpenWalletModal: w => setWalletModal(w ? { wallet: w } : { wallet: null }),
+    onEditTx: tx => setEditTx(tx),
+    onDeleteTx: handleDeleteTx,
+    onBulkDeleteTx: handleBulkDeleteTx,
     onSaveBudget: handleSaveBudget,
     onAddSavings: handleAddSavings,
     onDeleteGoal: handleDeleteGoal,
@@ -1142,7 +1470,7 @@ function App() {
   <header class="flex items-center justify-between gap-2 mb-5">
    <div class="cd !py-1 !px-2.5 !pr-3.5 pill flex items-center gap-2 font-bold text-xs"><img src="/new_icon.svg" class="w-6 h-6 rounded-full object-cover" alt="Dompetku Logo" />Dompetku${loadingData && html`<span class="w-1.5 h-1.5 rounded-full bg-[var(--ac)] animate-ping ml-0.5" title="Menyinkronkan data..."></span>`}</div>
    <nav class="hidden lg:flex cd !py-1 !px-1.5 pill gap-0.5">${TABS.map(([k, l]) => html`<button key=${k} onClick=${() => setTab(k)} class=${'px-3 py-1.5 pill font-semibold text-xs transition ' + (tab === k ? 'dk shadow-sm' : 'mu hover:text-[var(--tx)]')}>${l}</button>`)}</nav>
-   <div class="flex items-center gap-2"><div class="hidden md:flex cd !p-0.5 pill gap-0.5"><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => setModal('manual')}>${I('search', 13)}</button><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => toast('Tidak ada notifikasi baru')}>${I('bell', 13)}</button><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => setModal('voice')}>${I('mic', 13)}</button></div>
+   <div class="flex items-center gap-2"><div class="hidden md:flex cd !p-0.5 pill gap-0.5"><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => setTab('transaksi')} title="Cari transaksi">${I('search', 13)}</button><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => toast('Tidak ada notifikasi baru')}>${I('bell', 13)}</button><button class="ib !w-7 !h-7" style=${{ background: 'var(--in)' }} onClick=${() => setModal('voice')}>${I('mic', 13)}</button></div>
    
    <div class="relative">
     ${user ? html`
@@ -1177,11 +1505,12 @@ function App() {
    </div></header>
   <h1 class="text-[26px] md:text-[32px] font-semibold tracking-tight">${tab === 'overview' ? `Selamat pagi, ${displayName}` : TABS.find(t => t[0] === tab)[1]}</h1>
   <p class="mu mb-5 mt-1">Pantau tugas, progres, dan status keuangan Anda.</p>
-  ${tab === 'overview' && React.createElement(Overview, P)}${tab === 'transaksi' && html`<${Table} txs=${txs} full=${true} initialPeriod=${txPeriod}/>`}${tab === 'ai' && React.createElement(AI, P)}${tab === 'anggaran' && React.createElement(Budget, P)}${tab === 'target' && React.createElement(Goals, { goals, onOpenAdd: () => setGoalModalOpen(true), onAddSavings: P.onAddSavings, onDeleteGoal: P.onDeleteGoal })}${tab === 'laporan' && React.createElement(Report, P)}
+  ${tab === 'overview' && React.createElement(Overview, P)}${tab === 'transaksi' && html`<${Table} txs=${txs} wallets=${activeWalletsList} full=${true} initialPeriod=${txPeriod} onEditTx=${tx => setEditTx(tx)} onDeleteTx=${handleDeleteTx} onBulkDeleteTx=${handleBulkDeleteTx} onOpenQuick=${setModal}/>`}${tab === 'ai' && React.createElement(AI, P)}${tab === 'anggaran' && React.createElement(Budget, P)}${tab === 'target' && React.createElement(Goals, { goals, onOpenAdd: () => setGoalModalOpen(true), onAddSavings: P.onAddSavings, onDeleteGoal: P.onDeleteGoal })}${tab === 'laporan' && React.createElement(Report, P)}
  </div></div>
  <nav class="md:hidden fixed bottom-0 inset-x-0 cd !rounded-b-none flex justify-around items-center" style=${{ paddingBottom: 'calc(10px + env(safe-area-inset-bottom,0px))' }}>
   ${[['overview', 'grid', 'Home'], ['transaksi', 'cal', 'Transaksi'], ['+'], ['ai', 'mail', 'AI'], ['anggaran', 'layers', 'Anggaran']].map(([k, i, l]) => k === '+' ? html`<button key=${k} class="ac w-12 h-12 pill -mt-8 shadow-lg flex items-center justify-center" onClick=${() => setModal('manual')}>${I('plus', 22)}</button>` : html`<button key=${k} onClick=${() => setTab(k)} class=${'flex flex-col items-center gap-0.5 text-[10px] ' + (tab === k ? 'font-bold' : 'mu')}>${I(i, 19)}${l}</button>`)}</nav>
- ${modal && html`<${Quick} init=${modal} wallets=${activeWalletsList} categories=${categories} onClose=${() => setModal(null)} onSave=${save}/>`}
+ ${(modal || editTx) && html`<${Quick} init=${modal || 'manual'} editTx=${editTx} wallets=${activeWalletsList} categories=${categories} onClose=${() => { setModal(null); setEditTx(null); }} onSave=${save}/>`}
+ ${walletModal && html`<${WalletModal} wallet=${walletModal.wallet} onClose=${() => setWalletModal(null)} onSave=${handleSaveWallet} onDelete=${handleDeleteWallet}/>`}
  ${goalModalOpen && html`<${AddGoalModal} onClose=${() => setGoalModalOpen(false)} onSave=${handleSaveGoal}/>`}
  ${msg && html`<div class="fixed top-4 left-1/2 -translate-x-1/2 b dk z-50 shadow-lg">${msg}</div>`}</div>`;
 }

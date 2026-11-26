@@ -64,3 +64,38 @@ export async function insertWallet(name: string, initialBalance = 0, accountNumb
   if (error) throw error;
   return data;
 }
+
+export async function updateWallet(
+  id: string,
+  patch: { name?: string; initial_balance?: number; account_number?: string; is_active?: boolean }
+) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data, error } = await supabase
+    .from('wallets')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteWallet(id: string) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { error } = await supabase
+    .from('wallets')
+    .delete()
+    .eq('id', id)
+    .eq('user_id', user.id);
+
+  if (error) throw error;
+  return true;
+}

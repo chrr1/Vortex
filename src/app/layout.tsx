@@ -6,8 +6,21 @@ export const metadata: Metadata = {
   description: 'Manage your money naturally, understand your finances intelligently.',
   manifest: '/manifest.webmanifest',
   icons: { icon: '/new_icon.svg' },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Dompetku',
+  },
 };
-export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', themeColor: '#e6e6e6' };
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#e6e6e6' },
+    { media: '(prefers-color-scheme: dark)', color: '#0b0b0c' },
+  ],
+};
 
 // SVG sprite sheet diinline di <body> agar <use href="#id"> berfungsi di semua browser
 const SPRITE = `<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
